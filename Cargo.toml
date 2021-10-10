@@ -7,3 +7,6 @@ edition = "2018"
 
 [dependencies]
 rodio = { version = "0.14.0", default-features = false }
+
+[profile.dev.package.rodio]
+opt-level = 3
