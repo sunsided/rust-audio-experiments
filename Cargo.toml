@@ -3,7 +3,9 @@ name = "sound"
 version = "0.1.0"
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[example]]
+name = "rodio_soundgen"
+path = "examples/rodio_soundgen.rs"
 
 [dependencies]
 rodio = { version = "0.14.0", default-features = false }
