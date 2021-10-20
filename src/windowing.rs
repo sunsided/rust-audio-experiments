@@ -1,12 +1,28 @@
 use apodize;
 use num::NumCast;
 use std::iter;
+use std::mem::MaybeUninit;
 
 pub trait Window<T>
 where
     T: NumCast,
 {
-    fn to_vec(&self, window_size: usize) -> Vec<T>;
+    fn fill_vec(&self, window: &mut Vec<T>) {
+        todo!(); // doesn't work like this:
+                 // let mut window_uninit: Vec<MaybeUninit<T>> = unsafe { std::mem::transmute(window) };
+                 // self.fill_vec_uninit(&mut window_uninit);
+    }
+
+    fn fill_vec_uninit(&self, window: &mut Vec<MaybeUninit<T>>);
+
+    fn to_vec(&self, window_size: usize) -> Vec<T> {
+        let mut window: Vec<MaybeUninit<T>> = Vec::with_capacity(window_size);
+        unsafe {
+            window.set_len(window_size);
+        }
+        self.fill_vec_uninit(&mut window);
+        unsafe { std::mem::transmute(window) }
+    }
 }
 
 /// A Hann window function, also known as a Raised Cosine window.
@@ -16,12 +32,30 @@ impl<T> Window<T> for HannWindow
 where
     T: NumCast,
 {
+    /*
+    fn fill_vec(&self, window: &mut Vec<T>) {
+        let window_size = window.len();
+        for (x, w) in window.iter_mut().zip(apodize::hanning_iter(window_size)) {
+            *x = NumCast::from(w).unwrap();
+        }
+    }
+    */
+
+    fn fill_vec_uninit(&self, window: &mut Vec<MaybeUninit<T>>) {
+        let window_size = window.len();
+        for (i, w) in apodize::hanning_iter(window_size).enumerate() {
+            window[i].write(NumCast::from(w).unwrap());
+        }
+    }
+
+    /*
     fn to_vec(&self, window_size: usize) -> Vec<T> {
         apodize::hanning_iter(window_size)
             .map(NumCast::from)
             .map(|x| x.unwrap())
             .collect()
     }
+    */
 }
 
 impl Default for HannWindow {
@@ -37,6 +71,14 @@ impl<T> Window<T> for HammingWindow
 where
     T: NumCast,
 {
+    fn fill_vec(&self, window: &mut Vec<T>) {
+        todo!()
+    }
+
+    fn fill_vec_uninit(&self, window: &mut Vec<MaybeUninit<T>>) {
+        todo!()
+    }
+
     fn to_vec(&self, window_size: usize) -> Vec<T> {
         apodize::hamming_iter(window_size)
             .map(NumCast::from)
@@ -58,6 +100,14 @@ impl<T> Window<T> for BlackmanWindow
 where
     T: NumCast,
 {
+    fn fill_vec(&self, window: &mut Vec<T>) {
+        todo!()
+    }
+
+    fn fill_vec_uninit(&self, window: &mut Vec<MaybeUninit<T>>) {
+        todo!()
+    }
+
     fn to_vec(&self, window_size: usize) -> Vec<T> {
         apodize::blackman_iter(window_size)
             .map(NumCast::from)
@@ -79,6 +129,14 @@ impl<T> Window<T> for NuttallWindow
 where
     T: NumCast,
 {
+    fn fill_vec(&self, window: &mut Vec<T>) {
+        todo!()
+    }
+
+    fn fill_vec_uninit(&self, window: &mut Vec<MaybeUninit<T>>) {
+        todo!()
+    }
+
     fn to_vec(&self, window_size: usize) -> Vec<T> {
         apodize::nuttall_iter(window_size)
             .map(NumCast::from)
@@ -100,6 +158,14 @@ impl<T> Window<T> for BartlettWindow
 where
     T: NumCast,
 {
+    fn fill_vec(&self, window: &mut Vec<T>) {
+        todo!()
+    }
+
+    fn fill_vec_uninit(&self, window: &mut Vec<MaybeUninit<T>>) {
+        todo!()
+    }
+
     fn to_vec(&self, window_size: usize) -> Vec<T> {
         apodize::triangular_iter(window_size)
             .map(NumCast::from)
@@ -121,6 +187,14 @@ impl<T> Window<T> for BoxcarWindow
 where
     T: NumCast,
 {
+    fn fill_vec(&self, window: &mut Vec<T>) {
+        todo!()
+    }
+
+    fn fill_vec_uninit(&self, window: &mut Vec<MaybeUninit<T>>) {
+        todo!()
+    }
+
     fn to_vec(&self, window_size: usize) -> Vec<T> {
         iter::repeat(1.0)
             .take(window_size)
