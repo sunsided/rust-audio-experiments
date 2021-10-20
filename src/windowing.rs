@@ -1,3 +1,4 @@
+use apodize;
 use num::NumCast;
 use std::iter;
 
@@ -142,6 +143,8 @@ mod test {
 
     #[test]
     fn hann_apodization() {
+        // Note: Test case migrated from apodize crate.
+
         // Create a Hann window of length 7.
         let window: Vec<f32> = HannWindow::default().to_vec(7);
         let expected = vec![
@@ -173,6 +176,7 @@ mod test {
 
     #[test]
     fn hann_2() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = HannWindow::default().to_vec(2);
         let expected = vec![0.0, 0.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -180,6 +184,7 @@ mod test {
 
     #[test]
     fn hann_10() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = HannWindow::default().to_vec(10);
         let expected = vec![
             0.0,
@@ -198,6 +203,7 @@ mod test {
 
     #[test]
     fn hann_11() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = HannWindow::default().to_vec(11);
         let expected = vec![
             0.0,
@@ -217,6 +223,7 @@ mod test {
 
     #[test]
     fn hamming_2() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = HammingWindow::default().to_vec(2);
         let expected = vec![0.08000000000000002, 0.08000000000000002];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -224,6 +231,7 @@ mod test {
 
     #[test]
     fn hamming_3() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = HammingWindow::default().to_vec(3);
         let expected = vec![0.08000000000000002, 1.0, 0.08000000000000002];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -231,6 +239,7 @@ mod test {
 
     #[test]
     fn hamming_10() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = HammingWindow::default().to_vec(10);
         let expected = vec![
             0.08000000000000002,
@@ -249,6 +258,7 @@ mod test {
 
     #[test]
     fn blackman_2() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BlackmanWindow::default().to_vec(2);
         let expected = vec![0.000060000000000004494, 0.000060000000000004494];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -256,6 +266,7 @@ mod test {
 
     #[test]
     fn blackman_3() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BlackmanWindow::default().to_vec(3);
         let expected = vec![0.000060000000000004494, 1.0, 0.000060000000000004494];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -263,6 +274,7 @@ mod test {
 
     #[test]
     fn blackman_10() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BlackmanWindow::default().to_vec(10);
         let expected = vec![
             0.000060000000000004494,
@@ -281,6 +293,7 @@ mod test {
 
     #[test]
     fn nuttall_2() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = NuttallWindow::default().to_vec(2);
         let expected = vec![0.0, 0.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -288,6 +301,7 @@ mod test {
 
     #[test]
     fn nuttall_3() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = NuttallWindow::default().to_vec(3);
         let expected = vec![0.0, 1.0, 0.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -295,6 +309,7 @@ mod test {
 
     #[test]
     fn nuttall_10() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = NuttallWindow::default().to_vec(10);
         let expected = vec![
             0.0,
@@ -313,6 +328,7 @@ mod test {
 
     #[test]
     fn bartlett_1() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BartlettWindow::default().to_vec(1);
         let expected = vec![1.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -320,6 +336,7 @@ mod test {
 
     #[test]
     fn bartlett_2() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BartlettWindow::default().to_vec(2);
         let expected = vec![0.5, 0.5];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -327,6 +344,7 @@ mod test {
 
     #[test]
     fn bartlett_3() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BartlettWindow::default().to_vec(3);
         let expected = vec![0.3333333333333333, 1.0, 0.3333333333333333];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
@@ -334,6 +352,7 @@ mod test {
 
     #[test]
     fn bartlett_10() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BartlettWindow::default().to_vec(10);
         let expected = vec![
             0.09999999999999998,
@@ -352,6 +371,7 @@ mod test {
 
     #[test]
     fn bartlett_11() {
+        // Note: Test case migrated from apodize crate.
         let window: Vec<f32> = BartlettWindow::default().to_vec(11);
         let expected = vec![
             0.09090909090909094,
