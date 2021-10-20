@@ -1,6 +1,8 @@
-use stft::{WindowType, STFT};
+mod stft;
+mod windowing;
 
 fn main() {
+    /*
     // let's generate ten seconds of fake audio
     let sample_rate: usize = 44100;
     let seconds: usize = 10;
@@ -42,4 +44,5 @@ fn main() {
             stft.move_to_next_column();
         }
     }
+    */
 }
