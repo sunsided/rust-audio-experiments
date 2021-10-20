@@ -1,8 +1,7 @@
 use crate::windowing::Window;
-use num::traits::{Float, Signed, Zero};
-use num::NumCast;
+use num::traits::Zero;
 use rustfft::num_complex::Complex;
-use rustfft::{Fft, FftDirection, FftNum, FftPlanner};
+use rustfft::{Fft, FftNum, FftPlanner};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use strider::{SliceRing, SliceRingImpl};
@@ -112,10 +111,33 @@ where
         self.len() == 0
     }
 
+    /// Determines the corresponding frequencies of a column of the spectrogram.
+    ///
+    /// # Arguments
+    /// * [`sampling_rate`] - sampling frequency.
+    pub fn frequencies(&self, sampling_rate: f64) -> Vec<f64> {
+        let n = self.output_size();
+        (0..n)
+            .map(|f| (f as f64) / ((n - 0) as f64) * (sampling_rate / 2.))
+            .collect()
+    }
+
+    /// Determines the corresponding time of first column of the spectrogram.
+    pub fn first_time(&self, sampling_rate: f64) -> f64 {
+        (self.window_size.get() as f64) / (sampling_rate * 2.)
+    }
+
+    /// Determines time interval between two adjacent columns of the spectrogram.
+    pub fn time_interval(&self, sampling_rate: f64) -> f64 {
+        (self.step_size.get() as f64) / sampling_rate
+    }
+
     /// Determines the number of samples in the generated FFT.
     #[inline]
     pub fn output_size(&self) -> usize {
-        self.fft_size.get()
+        // Since we're dealing with real input data, we only need a single-sided band.
+        // We could be adding one here to get account for the DC component at index 0.
+        self.fft_size.get() / 2
     }
 
     /// Computes the Short-Time Fourier Transformation on the current window
@@ -141,6 +163,34 @@ where
         self.fetch_window_and_compute_internal();
         for (dst, src) in output.iter_mut().zip(self.fft_input_output.iter()) {
             *dst = src.norm();
+        }
+    }
+
+    /// Computes the Single Side Band Spectrum of the Short-Time Fourier Transformation
+    /// on the current window the normalized magnitudes in the provided output buffer.
+    ///
+    /// # Panics
+    /// Panics when `self.output_size() != output.len()`.
+    pub fn compute_ssb_spectrum(&mut self, output: &mut [T]) {
+        assert_eq!(output.len(), self.output_size());
+        self.fetch_window_and_compute_internal();
+
+        let normalizer = T::from(1. / self.window_size.get() as f64).unwrap();
+        let two = T::from(2).unwrap();
+
+        for (i, (dst, src)) in output
+            .iter_mut()
+            .zip(self.fft_input_output.iter())
+            .enumerate()
+        {
+            let mut adjusted_value = src.norm() * normalizer.clone();
+            // "Add" the mirrored spectrum onto the non-mirrored one; since values
+            // are symmetric for real inputs, we can simply multiply by two.
+            // We skip the zero-th bin as it contains the DC component.
+            if i > 0 {
+                adjusted_value = adjusted_value * two.clone();
+            }
+            *dst = adjusted_value;
         }
     }
 
@@ -190,6 +240,7 @@ mod test {
     use super::*;
     use crate::windowing::HannWindow;
     use approx::{assert_relative_eq, assert_ulps_eq};
+    use num::traits::FloatConst;
 
     #[test]
     pub fn output_size_is_half_of_fft_size() {
@@ -312,6 +363,8 @@ mod test {
         stft.append_samples(&[500., 0., 100., 500., 0., 100., 0., 500.]);
         assert!(stft.contains_enough_to_compute());
 
+        let _frequencies = stft.frequencies(8.);
+
         let mut output: Vec<f64> = vec![0.; stft.output_size()];
         stft.compute_magnitudes(&mut output);
         let expected = vec![
@@ -330,5 +383,81 @@ mod test {
         let mut output2: Vec<f64> = vec![0.; stft.output_size()];
         stft.compute_magnitudes(&mut output2);
         assert_ulps_eq!(output.as_slice(), output2.as_slice(), max_ulps = 10);
+    }
+
+    #[test]
+    pub fn welp() {
+        // from: https://medium.com/analytics-vidhya/breaking-down-confusions-over-fast-fourier-transform-fft-1561a029b1ab
+        let sampling_rate = 1000.;
+        let sampling_interval = 1. / sampling_rate;
+        let num_time_points = 500usize;
+        let time: Vec<f64> = (0..num_time_points)
+            .map(|t| t as f64 * sampling_interval)
+            .collect();
+
+        // Define the frequencies.
+        let f1 = 20.;
+        let f2 = 220.;
+        let f3 = 138.;
+
+        // Define the amplitudes.
+        let dc = 5.;
+        let a1 = 12.;
+        let a2 = 5.;
+        let a3 = 4.;
+
+        // Define the offsets/phases.
+        let p1 = 0.3;
+        let p2 = 0.5;
+        let p3 = 1.5;
+
+        // Helper functions.
+        #[inline]
+        fn omega(frequency: f64) -> f64 {
+            2. * f64::PI() * frequency
+        }
+
+        #[inline]
+        fn sinusoid(t: f64, frequency: f64, amplitude: f64, phase: f64) -> f64 {
+            amplitude * (omega(frequency) * t - phase).sin()
+        }
+
+        // Create the signal.
+        let signal: Vec<f64> = time
+            .iter()
+            .map(|t| {
+                dc + sinusoid(*t, f1, a1, p1) + sinusoid(*t, f2, a2, p2) + sinusoid(*t, f3, a3, p3)
+            })
+            .collect();
+
+        // TODO: add noise, maybe
+
+        // We can compute the full FFT here by using as many FFT bins as the window is wide, or more.
+        // If the exact same number is used, the results are virtually perfect.
+        let num_fft_samples = 500;
+        let mut stft = ShortTimeFourierTransform::<f64>::new(
+            NonZeroUsize::new(num_fft_samples).unwrap(),
+            NonZeroUsize::new(num_time_points).unwrap(),
+            NonZeroUsize::new(num_time_points).unwrap(),
+        );
+
+        stft.append_samples(&signal);
+
+        let mut ssb_spectrum = vec![0.; stft.output_size()];
+        stft.compute_ssb_spectrum(&mut ssb_spectrum);
+        let ssb_spectrum = ssb_spectrum;
+
+        let expected_bin_f1 = (f1 * num_fft_samples as f64 / sampling_rate as f64) as usize;
+        let expected_bin_f2 = (f2 * num_fft_samples as f64 / sampling_rate as f64) as usize;
+        let expected_bin_f3 = (f3 * num_fft_samples as f64 / sampling_rate as f64) as usize;
+
+        assert_relative_eq!(ssb_spectrum[expected_bin_f1], a1, max_relative = 0.1);
+        assert_relative_eq!(ssb_spectrum[expected_bin_f2], a2, max_relative = 0.1);
+        assert_relative_eq!(ssb_spectrum[expected_bin_f3], a3, max_relative = 0.1);
+
+        let frequencies = stft.frequencies(sampling_rate);
+        assert_relative_eq!(frequencies[expected_bin_f1], f1, max_relative = 0.1);
+        assert_relative_eq!(frequencies[expected_bin_f2], f2, max_relative = 0.1);
+        assert_relative_eq!(frequencies[expected_bin_f3], f3, max_relative = 0.1);
     }
 }
