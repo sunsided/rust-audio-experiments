@@ -36,6 +36,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "072df7202e63b127ab55acfe16ce97013d5b97bf160489336d3f1840fd78e99e"
 dependencies = [
+ "num-complex",
  "num-traits",
 ]
 
@@ -769,6 +770,7 @@ dependencies = [
  "num",
  "rodio",
  "rustfft",
+ "strider",
 ]
 
 [[package]]
@@ -782,6 +784,12 @@ name = "strength_reduce"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3ff2f71c82567c565ba4b3009a9350a96a7269eaa4001ebedae926230bc2254"
+
+[[package]]
+name = "strider"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8eb42aef241d1b908f44f27961bb726fdf8cdc321f0f2b39338bfa6ad6fc007"
 
 [[package]]
 name = "strsim"
