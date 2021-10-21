@@ -1,27 +1,108 @@
 use apodize;
+use num::traits::Zero;
 use num::NumCast;
 use std::iter;
+use std::iter::Sum;
 use std::num::NonZeroUsize;
+use std::ops::Add;
+use std::sync::mpsc::Iter;
 
-pub trait Window<T>
+#[derive(Debug)]
+pub struct Window<T>
 where
-    T: NumCast,
+    T: Zero,
 {
-    fn to_vec(&self, window_size: NonZeroUsize) -> Vec<T>;
+    /// The vector of values.
+    pub window: Vec<T>,
+    /// The sum of values in the window.
+    pub sum: Option<T>,
+}
+
+impl<T> Window<T>
+where
+    T: Zero,
+{
+    pub fn clear(&mut self) {
+        self.window.clear();
+        self.sum = None;
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.window.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.window.is_empty()
+    }
+
+    #[inline]
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.window.iter()
+    }
+}
+
+impl<T> Default for Window<T>
+where
+    T: Zero,
+{
+    fn default() -> Self {
+        Self {
+            window: Vec::default(),
+            sum: None,
+        }
+    }
+}
+
+impl<T> From<Vec<T>> for Window<T>
+where
+    T: Zero + Add + Clone,
+{
+    fn from(vec: Vec<T>) -> Self {
+        if vec.is_empty() {
+            return Self {
+                window: Vec::default(),
+                sum: None,
+            };
+        }
+        let sum = vec.iter().fold(T::zero(), |a, b| a.add(b.clone()));
+        Window {
+            window: vec,
+            sum: Some(sum),
+        }
+    }
+}
+
+impl<T> Into<Vec<T>> for Window<T>
+where
+    T: Zero,
+{
+    fn into(self) -> Vec<T> {
+        self.window
+    }
+}
+
+pub trait WindowFunction<T>
+where
+    T: NumCast + Zero,
+{
+    fn to_vec(&self, window_size: NonZeroUsize) -> Window<T>;
 }
 
 /// A Hann window function, also known as a Raised Cosine window.
 pub struct HannWindow;
 
-impl<T> Window<T> for HannWindow
+impl<T> WindowFunction<T> for HannWindow
 where
-    T: NumCast,
+    T: NumCast + Zero + Clone,
 {
-    fn to_vec(&self, window_size: NonZeroUsize) -> Vec<T> {
-        apodize::hanning_iter(window_size.get())
+    fn to_vec(&self, window_size: NonZeroUsize) -> Window<T> {
+        let window: Vec<T> = apodize::hanning_iter(window_size.get())
             .map(NumCast::from)
             .map(|x| x.unwrap())
-            .collect()
+            .collect();
+        window.into()
     }
 }
 
@@ -34,15 +115,16 @@ impl Default for HannWindow {
 /// A Hamming window function.
 pub struct HammingWindow;
 
-impl<T> Window<T> for HammingWindow
+impl<T> WindowFunction<T> for HammingWindow
 where
-    T: NumCast,
+    T: NumCast + Zero + Clone,
 {
-    fn to_vec(&self, window_size: NonZeroUsize) -> Vec<T> {
-        apodize::hamming_iter(window_size.get())
+    fn to_vec(&self, window_size: NonZeroUsize) -> Window<T> {
+        let window: Vec<T> = apodize::hamming_iter(window_size.get())
             .map(NumCast::from)
             .map(|x| x.unwrap())
-            .collect()
+            .collect();
+        window.into()
     }
 }
 
@@ -55,15 +137,16 @@ impl Default for HammingWindow {
 /// A Blackman window function.
 pub struct BlackmanWindow;
 
-impl<T> Window<T> for BlackmanWindow
+impl<T> WindowFunction<T> for BlackmanWindow
 where
-    T: NumCast,
+    T: NumCast + Zero + Clone,
 {
-    fn to_vec(&self, window_size: NonZeroUsize) -> Vec<T> {
-        apodize::blackman_iter(window_size.get())
+    fn to_vec(&self, window_size: NonZeroUsize) -> Window<T> {
+        let window: Vec<T> = apodize::blackman_iter(window_size.get())
             .map(NumCast::from)
             .map(|x| x.unwrap())
-            .collect()
+            .collect();
+        window.into()
     }
 }
 
@@ -76,15 +159,16 @@ impl Default for BlackmanWindow {
 /// A Nutall window function.
 pub struct NuttallWindow;
 
-impl<T> Window<T> for NuttallWindow
+impl<T> WindowFunction<T> for NuttallWindow
 where
-    T: NumCast,
+    T: NumCast + Zero + Clone,
 {
-    fn to_vec(&self, window_size: NonZeroUsize) -> Vec<T> {
-        apodize::nuttall_iter(window_size.get())
+    fn to_vec(&self, window_size: NonZeroUsize) -> Window<T> {
+        let window: Vec<T> = apodize::nuttall_iter(window_size.get())
             .map(NumCast::from)
             .map(|x| x.unwrap())
-            .collect()
+            .collect();
+        window.into()
     }
 }
 
@@ -97,15 +181,16 @@ impl Default for NuttallWindow {
 /// A Bartlett (triangular) window function.
 pub struct BartlettWindow;
 
-impl<T> Window<T> for BartlettWindow
+impl<T> WindowFunction<T> for BartlettWindow
 where
-    T: NumCast,
+    T: NumCast + Zero + Clone,
 {
-    fn to_vec(&self, window_size: NonZeroUsize) -> Vec<T> {
-        apodize::triangular_iter(window_size.get())
+    fn to_vec(&self, window_size: NonZeroUsize) -> Window<T> {
+        let window: Vec<T> = apodize::triangular_iter(window_size.get())
             .map(NumCast::from)
             .map(|x| x.unwrap())
-            .collect()
+            .collect();
+        window.into()
     }
 }
 
@@ -118,16 +203,17 @@ impl Default for BartlettWindow {
 /// A Boxcar window function (i.e. similar to not using a window at all).
 pub struct BoxcarWindow;
 
-impl<T> Window<T> for BoxcarWindow
+impl<T> WindowFunction<T> for BoxcarWindow
 where
-    T: NumCast,
+    T: NumCast + Zero + Clone,
 {
-    fn to_vec(&self, window_size: NonZeroUsize) -> Vec<T> {
-        iter::repeat(1.0)
+    fn to_vec(&self, window_size: NonZeroUsize) -> Window<T> {
+        let window: Vec<T> = iter::repeat(1.0)
             .take(window_size.get())
             .map(NumCast::from)
             .map(|x| x.unwrap())
-            .collect()
+            .collect();
+        window.into()
     }
 }
 
@@ -147,7 +233,9 @@ mod test {
         // Note: Test case migrated from apodize crate.
 
         // Create a Hann window of length 7.
-        let window: Vec<f32> = HannWindow::default().to_vec(NonZeroUsize::new(7).unwrap());
+        let window: Vec<f32> = HannWindow::default()
+            .to_vec(NonZeroUsize::new(7).unwrap())
+            .into();
         let expected = vec![
             0.0,
             0.24999999999999994,
@@ -178,7 +266,9 @@ mod test {
     #[test]
     fn hann_2() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = HannWindow::default().to_vec(NonZeroUsize::new(2).unwrap());
+        let window: Vec<f32> = HannWindow::default()
+            .to_vec(NonZeroUsize::new(2).unwrap())
+            .into();
         let expected = vec![0.0, 0.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -186,7 +276,9 @@ mod test {
     #[test]
     fn hann_10() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = HannWindow::default().to_vec(NonZeroUsize::new(10).unwrap());
+        let window: Vec<f32> = HannWindow::default()
+            .to_vec(NonZeroUsize::new(10).unwrap())
+            .into();
         let expected = vec![
             0.0,
             0.11697777844051094,
@@ -205,7 +297,9 @@ mod test {
     #[test]
     fn hann_11() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = HannWindow::default().to_vec(NonZeroUsize::new(11).unwrap());
+        let window: Vec<f32> = HannWindow::default()
+            .to_vec(NonZeroUsize::new(11).unwrap())
+            .into();
         let expected = vec![
             0.0,
             0.09549150281252627,
@@ -225,7 +319,9 @@ mod test {
     #[test]
     fn hamming_2() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = HammingWindow::default().to_vec(NonZeroUsize::new(2).unwrap());
+        let window: Vec<f32> = HammingWindow::default()
+            .to_vec(NonZeroUsize::new(2).unwrap())
+            .into();
         let expected = vec![0.08000000000000002, 0.08000000000000002];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -233,7 +329,9 @@ mod test {
     #[test]
     fn hamming_3() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = HammingWindow::default().to_vec(NonZeroUsize::new(3).unwrap());
+        let window: Vec<f32> = HammingWindow::default()
+            .to_vec(NonZeroUsize::new(3).unwrap())
+            .into();
         let expected = vec![0.08000000000000002, 1.0, 0.08000000000000002];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -241,7 +339,9 @@ mod test {
     #[test]
     fn hamming_10() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = HammingWindow::default().to_vec(NonZeroUsize::new(10).unwrap());
+        let window: Vec<f32> = HammingWindow::default()
+            .to_vec(NonZeroUsize::new(10).unwrap())
+            .into();
         let expected = vec![
             0.08000000000000002,
             0.1876195561652701,
@@ -260,7 +360,9 @@ mod test {
     #[test]
     fn blackman_2() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BlackmanWindow::default().to_vec(NonZeroUsize::new(2).unwrap());
+        let window: Vec<f32> = BlackmanWindow::default()
+            .to_vec(NonZeroUsize::new(2).unwrap())
+            .into();
         let expected = vec![0.000060000000000004494, 0.000060000000000004494];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -268,7 +370,9 @@ mod test {
     #[test]
     fn blackman_3() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BlackmanWindow::default().to_vec(NonZeroUsize::new(3).unwrap());
+        let window: Vec<f32> = BlackmanWindow::default()
+            .to_vec(NonZeroUsize::new(3).unwrap())
+            .into();
         let expected = vec![0.000060000000000004494, 1.0, 0.000060000000000004494];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -276,7 +380,9 @@ mod test {
     #[test]
     fn blackman_10() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BlackmanWindow::default().to_vec(NonZeroUsize::new(10).unwrap());
+        let window: Vec<f32> = BlackmanWindow::default()
+            .to_vec(NonZeroUsize::new(10).unwrap())
+            .into();
         let expected = vec![
             0.000060000000000004494,
             0.015071173410218106,
@@ -295,7 +401,9 @@ mod test {
     #[test]
     fn nuttall_2() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = NuttallWindow::default().to_vec(NonZeroUsize::new(2).unwrap());
+        let window: Vec<f32> = NuttallWindow::default()
+            .to_vec(NonZeroUsize::new(2).unwrap())
+            .into();
         let expected = vec![0.0, 0.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -303,7 +411,9 @@ mod test {
     #[test]
     fn nuttall_3() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = NuttallWindow::default().to_vec(NonZeroUsize::new(3).unwrap());
+        let window: Vec<f32> = NuttallWindow::default()
+            .to_vec(NonZeroUsize::new(3).unwrap())
+            .into();
         let expected = vec![0.0, 1.0, 0.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -311,7 +421,9 @@ mod test {
     #[test]
     fn nuttall_10() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = NuttallWindow::default().to_vec(NonZeroUsize::new(10).unwrap());
+        let window: Vec<f32> = NuttallWindow::default()
+            .to_vec(NonZeroUsize::new(10).unwrap())
+            .into();
         let expected = vec![
             0.0,
             0.013748631,
@@ -330,7 +442,9 @@ mod test {
     #[test]
     fn bartlett_1() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BartlettWindow::default().to_vec(NonZeroUsize::new(1).unwrap());
+        let window: Vec<f32> = BartlettWindow::default()
+            .to_vec(NonZeroUsize::new(1).unwrap())
+            .into();
         let expected = vec![1.0];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -338,7 +452,9 @@ mod test {
     #[test]
     fn bartlett_2() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BartlettWindow::default().to_vec(NonZeroUsize::new(2).unwrap());
+        let window: Vec<f32> = BartlettWindow::default()
+            .to_vec(NonZeroUsize::new(2).unwrap())
+            .into();
         let expected = vec![0.5, 0.5];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -346,7 +462,9 @@ mod test {
     #[test]
     fn bartlett_3() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BartlettWindow::default().to_vec(NonZeroUsize::new(3).unwrap());
+        let window: Vec<f32> = BartlettWindow::default()
+            .to_vec(NonZeroUsize::new(3).unwrap())
+            .into();
         let expected = vec![0.3333333333333333, 1.0, 0.3333333333333333];
         assert_ulps_eq!(window.as_slice(), expected.as_slice(), max_ulps = 10);
     }
@@ -354,7 +472,9 @@ mod test {
     #[test]
     fn bartlett_10() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BartlettWindow::default().to_vec(NonZeroUsize::new(10).unwrap());
+        let window: Vec<f32> = BartlettWindow::default()
+            .to_vec(NonZeroUsize::new(10).unwrap())
+            .into();
         let expected = vec![
             0.09999999999999998,
             0.30000000000000004,
@@ -373,7 +493,9 @@ mod test {
     #[test]
     fn bartlett_11() {
         // Note: Test case migrated from apodize crate.
-        let window: Vec<f32> = BartlettWindow::default().to_vec(NonZeroUsize::new(11).unwrap());
+        let window: Vec<f32> = BartlettWindow::default()
+            .to_vec(NonZeroUsize::new(11).unwrap())
+            .into();
         let expected = vec![
             0.09090909090909094,
             0.2727272727272727,

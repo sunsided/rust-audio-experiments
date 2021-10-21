@@ -1,4 +1,4 @@
-use crate::windowing::Window;
+use crate::windowing::{Window, WindowFunction};
 use num::traits::Zero;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftNum, FftPlanner};
@@ -33,7 +33,7 @@ where
     /// - If the window is of non-zero length, values will be multiplied with the [`real_input`]
     ///   before passing them on to the FFT.
     /// - If the window length is zero, the [`real_input`] values will be passed as-is.
-    window: Vec<T>,
+    pub window: Window<T>,
 }
 
 impl<T> ShortTimeFourierTransform<T>
@@ -63,12 +63,12 @@ where
                 .take(fft_size.get())
                 .collect(),
             fft_scratch: vec![Complex::<T>::zero(); scratch_len],
-            window: Vec::default(),
+            window: Window::default(),
         }
     }
 
     /// Sets the window function to use.
-    pub fn set_window(&mut self, window: Option<&dyn Window<T>>) {
+    pub fn set_window(&mut self, window: Option<&dyn WindowFunction<T>>) {
         if let Some(window) = window {
             self.window = window.to_vec(self.window_size);
         } else {
@@ -77,7 +77,7 @@ where
     }
 
     /// Sets the window function to use.
-    pub fn with_window(mut self, window: &dyn Window<T>) -> Self {
+    pub fn with_window(mut self, window: &dyn WindowFunction<T>) -> Self {
         self.set_window(Some(window));
         self
     }
@@ -175,7 +175,10 @@ where
         assert_eq!(output.len(), self.output_size());
         self.fetch_window_and_compute_internal();
 
-        let normalizer = T::from(1. / self.window_size.get() as f64).unwrap();
+        // We either normalize by the window size (if no windowing function
+        // is given) or by the sum of the window coefficients.
+        let window_size = T::from(self.window_size.get() as f64).unwrap();
+        let normalizer = T::from(1.).unwrap() / self.window.sum.unwrap_or(window_size);
         let two = T::from(2).unwrap();
 
         for (i, (dst, src)) in output
@@ -331,10 +334,12 @@ mod test {
             Complex::new(429.289322, -29.289322),
             Complex::new(400., 900.),
             Complex::new(570.710678, 170.710678),
+            /*
             Complex::new(-500., 0.),
             Complex::new(570.710678, -170.710678),
             Complex::new(400., -900.),
             Complex::new(429.289322, 29.289322),
+            */
         ];
         assert_relative_eq!(
             output.as_slice(),
@@ -372,10 +377,12 @@ mod test {
             430.2873298827358,
             984.8857801796105,
             595.6952356216941,
+            /*
             500.0,
             595.6952356216941,
             984.8857801796105,
             430.2873298827358,
+            */
         ];
         assert_ulps_eq!(output.as_slice(), expected.as_slice(), max_ulps = 10);
 
