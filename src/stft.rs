@@ -36,6 +36,7 @@ where
     pub window: Window<T>,
 }
 
+#[allow(dead_code)]
 impl<T> ShortTimeFourierTransform<T>
 where
     T: FftNum + num::Float,
@@ -244,10 +245,11 @@ mod test {
     use crate::windowing::HannWindow;
     use approx::{assert_relative_eq, assert_ulps_eq};
     use num::traits::FloatConst;
+    use rand::prelude::*;
 
     #[test]
     pub fn output_size_is_half_of_fft_size() {
-        let mut stft = ShortTimeFourierTransform::<f64>::new(
+        let stft = ShortTimeFourierTransform::<f64>::new(
             NonZeroUsize::new(32).unwrap(),
             NonZeroUsize::new(8).unwrap(),
             NonZeroUsize::new(4).unwrap(),
@@ -393,7 +395,7 @@ mod test {
     }
 
     #[test]
-    pub fn welp() {
+    pub fn it_works() {
         // from: https://medium.com/analytics-vidhya/breaking-down-confusions-over-fast-fourier-transform-fft-1561a029b1ab
         let sampling_rate = 1000.;
         let sampling_interval = 1. / sampling_rate;
@@ -418,6 +420,9 @@ mod test {
         let p2 = 0.5;
         let p3 = 1.5;
 
+        // The noise amplitude.
+        let noise_amplitude = 1.0;
+
         // Helper functions.
         #[inline]
         fn omega(frequency: f64) -> f64 {
@@ -430,14 +435,21 @@ mod test {
         }
 
         // Create the signal.
-        let signal: Vec<f64> = time
+        let signal = time
             .iter()
             .map(|t| {
                 dc + sinusoid(*t, f1, a1, p1) + sinusoid(*t, f2, a2, p2) + sinusoid(*t, f3, a3, p3)
-            })
-            .collect();
+            });
 
-        // TODO: add noise, maybe
+        fn gen_noise<R: Rng>(rng: &mut R, amplitude: f64)-> f64 {
+            let value: f64 = rng.sample(rand::distributions::Standard);
+            value * amplitude
+        }
+
+        let mut rng = StdRng::seed_from_u64(0);
+        let signal: Vec<_> = signal
+            .map(|x| x + gen_noise(&mut rng, noise_amplitude))
+            .collect();
 
         // We can compute the full FFT here by using as many FFT bins as the window is wide, or more.
         // If the exact same number is used, the results are virtually perfect.
@@ -446,7 +458,7 @@ mod test {
             NonZeroUsize::new(num_fft_samples).unwrap(),
             NonZeroUsize::new(num_time_points).unwrap(),
             NonZeroUsize::new(num_time_points).unwrap(),
-        );
+        ).with_window(&HannWindow::default());
 
         stft.append_samples(&signal);
 
@@ -454,17 +466,19 @@ mod test {
         stft.compute_ssb_spectrum(&mut ssb_spectrum);
         let ssb_spectrum = ssb_spectrum;
 
-        let expected_bin_f1 = (f1 * num_fft_samples as f64 / sampling_rate as f64) as usize;
-        let expected_bin_f2 = (f2 * num_fft_samples as f64 / sampling_rate as f64) as usize;
-        let expected_bin_f3 = (f3 * num_fft_samples as f64 / sampling_rate as f64) as usize;
+        let expected_bin_f1 = (f1 * num_fft_samples as f64 / sampling_rate) as usize;
+        let expected_bin_f2 = (f2 * num_fft_samples as f64 / sampling_rate) as usize;
+        let expected_bin_f3 = (f3 * num_fft_samples as f64 / sampling_rate) as usize;
 
-        assert_relative_eq!(ssb_spectrum[expected_bin_f1], a1, max_relative = 0.1);
-        assert_relative_eq!(ssb_spectrum[expected_bin_f2], a2, max_relative = 0.1);
-        assert_relative_eq!(ssb_spectrum[expected_bin_f3], a3, max_relative = 0.1);
+        assert_relative_eq!(ssb_spectrum[0], dc, max_relative = 0.1);
+        assert_relative_eq!(ssb_spectrum[expected_bin_f1], a1, max_relative = 0.01);
+        assert_relative_eq!(ssb_spectrum[expected_bin_f2], a2, max_relative = 0.01);
+        assert_relative_eq!(ssb_spectrum[expected_bin_f3], a3, max_relative = 0.01);
 
         let frequencies = stft.frequencies(sampling_rate);
-        assert_relative_eq!(frequencies[expected_bin_f1], f1, max_relative = 0.1);
-        assert_relative_eq!(frequencies[expected_bin_f2], f2, max_relative = 0.1);
-        assert_relative_eq!(frequencies[expected_bin_f3], f3, max_relative = 0.1);
+        assert_relative_eq!(frequencies[0], 0.0, max_relative = 0.0);
+        assert_relative_eq!(frequencies[expected_bin_f1], f1, max_relative = 0.0);
+        assert_relative_eq!(frequencies[expected_bin_f2], f2, max_relative = 0.0);
+        assert_relative_eq!(frequencies[expected_bin_f3], f3, max_relative = 0.0);
     }
 }

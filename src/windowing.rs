@@ -1,11 +1,8 @@
-use apodize;
 use num::traits::Zero;
 use num::NumCast;
 use std::iter;
-use std::iter::Sum;
 use std::num::NonZeroUsize;
 use std::ops::Add;
-use std::sync::mpsc::Iter;
 
 #[derive(Debug)]
 pub struct Window<T>
@@ -74,12 +71,12 @@ where
     }
 }
 
-impl<T> Into<Vec<T>> for Window<T>
-where
-    T: Zero,
+impl<T> From<Window<T>> for Vec<T>
+    where
+        T: Zero,
 {
-    fn into(self) -> Vec<T> {
-        self.window
+    fn from(value: Window<T>) -> Self {
+        value.window
     }
 }
 
