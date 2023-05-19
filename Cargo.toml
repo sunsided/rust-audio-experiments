@@ -8,8 +8,8 @@ name = "rodio_soundgen"
 path = "examples/rodio_soundgen.rs"
 
 [dependencies]
-rodio = { version = "0.14.0", default-features = false }
-rustfft = "6.0.1"
+rodio = { version = "0.17.1", default-features = false }
+rustfft = "6.1.0"
 num = "0.4.0"
 apodize = "1.0.0"
 strider = "0.1.3"
@@ -19,4 +19,4 @@ rand = "0.8.5"
 opt-level = 3
 
 [dev-dependencies]
-approx = { version = "0.5.0", features = ["num-complex"] }
+approx = { version = "0.5.1", features = ["num-complex"] }
