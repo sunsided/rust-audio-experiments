@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use crate::audiogen::{Component, generate_audio};
 use crate::stft::ShortTimeFourierTransform;
 use pixels::{Error, Pixels, SurfaceTexture};
@@ -30,7 +31,6 @@ fn main() -> Result<(), Error> {
     let wake_up = Arc::new((Mutex::new(false), Condvar::new()));
 
     let spectrogram_column = calculate_stft_threaded(wake_up.clone(), completed.clone(), sample_rate, signal_duration);
-
     visualize(wake_up, paused, completed, spectrogram_column)
 }
 
@@ -61,8 +61,12 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
     println!("Highest detectable frequency: {} Hz", spectrogram_column.len() as f64 * sample_rate as f64 / (num_fft_samples.get() as f64));
 
     let spectrogram_column = Arc::new(RwLock::new(spectrogram_column));
-
     let spectrum = spectrogram_column.clone();
+
+    let expected_loops_per_second = (sample_rate as f64) / step_size.get() as f64;
+    let expected_duration_per_loop = Duration::from_secs_f64(1.0 / expected_loops_per_second);
+    println!("Will process one frame every {:?}", expected_duration_per_loop);
+
     std::thread::spawn(move || {
         // Wait for the thread to be signaled.
         {
@@ -73,9 +77,27 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
             }
         }
 
+        let start = Instant::now();
+        let mut last = start;
+        let mut count = 0;
+
         for some_samples in all_samples[..].chunks(1024) {
             stft.append_samples(some_samples);
             while stft.contains_enough_to_compute() {
+                // Synchronize with the input buffer.
+                let now = Instant::now();
+                let delay = last - now;
+                last = now;
+
+                // Sleep for the expected time if needed.
+                let wait_time = expected_duration_per_loop - delay;
+                if wait_time.as_secs_f64() > 0.0 {
+                    std::thread::sleep(wait_time);
+                }
+
+                // Aggregate statistics.
+                count += 1;
+
                 let mut spectrum = spectrum.write().expect("lock acquired");
                 stft.compute_ssb_spectrum(&mut spectrum[..]);
                 drop(spectrum);
@@ -85,7 +107,8 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
         }
 
         completed.store(true, Ordering::Relaxed);
-        println!("STFT calculation finished");
+        let duration  = Instant::now() - start;
+        println!("STFT calculation finished in {} loops after {:?}", count, duration);
     });
     spectrogram_column
 }
