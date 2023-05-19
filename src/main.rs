@@ -65,7 +65,7 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
 
     let expected_loops_per_second = (sample_rate as f64) / step_size.get() as f64;
     let expected_duration_per_loop = Duration::from_secs_f64(1.0 / expected_loops_per_second);
-    println!("Will process one frame every {:?}", expected_duration_per_loop);
+    println!("Will process one audio frame every {:?}", expected_duration_per_loop);
 
     std::thread::spawn(move || {
         // Wait for the thread to be signaled.
@@ -78,20 +78,16 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
         }
 
         let start = Instant::now();
-        let mut last = start;
         let mut count = 0;
 
         for some_samples in all_samples[..].chunks(1024) {
             stft.append_samples(some_samples);
             while stft.contains_enough_to_compute() {
                 // Synchronize with the input buffer.
-                let now = Instant::now();
-                let delay = last - now;
-                last = now;
-
-                // Sleep for the expected time if needed.
-                let wait_time = expected_duration_per_loop - delay;
-                if wait_time.as_secs_f64() > 0.0 {
+                let runtime = Instant::now() - start;
+                let expected_time = expected_duration_per_loop * count;
+                if runtime < expected_time {
+                    let wait_time = expected_time - runtime;
                     std::thread::sleep(wait_time);
                 }
 
