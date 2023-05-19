@@ -40,7 +40,7 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
         Component::new_dc(5.),
         Component::new(20.0, 12.0, 0.3),
         Component::new(220.0, 5.0, 0.5),
-        Component::new(12000.0, 4.0, 1.5),
+        Component::new(9001.0, 4.0, 1.5),
     ]);
 
     println!("Sample rate: {} Hz", sample_rate);

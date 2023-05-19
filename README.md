@@ -1,4 +1,4 @@
-# Short-Time Fourier Transforms in Rust
+# 🔉 Sounds & Short-Time Fourier Transforms
 
 This project experiments with calculation and visualizations of STFTs in Rust.
 
