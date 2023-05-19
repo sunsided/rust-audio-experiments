@@ -7,8 +7,12 @@ edition = "2021"
 name = "rodio_soundgen"
 path = "examples/rodio_soundgen.rs"
 
+[[example]]
+name = "rodio_play"
+path = "examples/rodio_play.rs"
+
 [dependencies]
-rodio = { version = "0.17.1", default-features = false }
+rodio = { version = "0.17.1", default-features = false, features = ["vorbis"] }
 rustfft = "6.1.0"
 num = "0.4.0"
 apodize = "1.0.0"
