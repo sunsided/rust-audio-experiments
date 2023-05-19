@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 /// Generates "audio" from the specified frequency components.
 ///
 /// ## Arguments

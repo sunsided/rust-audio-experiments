@@ -1,10 +1,13 @@
+use std::fs::File;
+use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use crate::audiogen::{Component, generate_audio};
 use crate::stft::ShortTimeFourierTransform;
-use pixels::{Error, Pixels, SurfaceTexture};
+use pixels::{Pixels, SurfaceTexture};
+use rodio::{Decoder, Source};
+use anyhow::Result;
 use winit::{
     dpi::LogicalSize,
     event::{Event, VirtualKeyCode},
@@ -20,28 +23,26 @@ mod audiogen;
 const WIDTH: u32 = 400;
 const HEIGHT: u32 = 300;
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<()> {
     let paused = Arc::new(AtomicBool::new(false));
     let completed = Arc::new(AtomicBool::new(false));
 
-    let sample_rate = 44100;
-    let signal_duration = 10.0;
+    let file = File::open("audio/sweep.ogg")?;
+    let decoder = Decoder::new(BufReader::new(file))?;
+
+    let sample_rate = decoder.sample_rate() as usize;
 
     // Signal to synchronize the render thread with the STFT thread.
     let wake_up = Arc::new((Mutex::new(false), Condvar::new()));
 
-    let spectrogram_column = calculate_stft_threaded(wake_up.clone(), completed.clone(), sample_rate, signal_duration);
+    let spectrogram_column = calculate_stft_threaded(wake_up.clone(), completed.clone(), sample_rate, decoder);
     visualize(wake_up, paused, completed, spectrogram_column)
 }
 
 /// Calculates the STFT in a background thread.
-fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<AtomicBool>, sample_rate: usize, signal_duration: f64) -> Arc<RwLock<Vec<f64>>> {
-    let all_samples = generate_audio(sample_rate, signal_duration, [
-        Component::new_dc(5.),
-        Component::new(20.0, 12.0, 0.3),
-        Component::new(220.0, 5.0, 0.5),
-        Component::new(9001.0, 4.0, 1.5),
-    ]);
+fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<AtomicBool>, sample_rate: usize, decoder: Decoder<BufReader<File>>) -> Arc<RwLock<Vec<f64>>> {
+    let all_samples: Vec<f64> = decoder.into_iter().map(|i| i as f64 / (i16::MAX as f64)).collect();
+    let signal_duration = all_samples.len() as f64 / sample_rate as f64;
 
     println!("Sample rate: {} Hz", sample_rate);
     println!("Input signal duration: {} s", signal_duration);
@@ -110,7 +111,7 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
 }
 
 /// Visualizes the STFT in a background thread.
-fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f64>>>) -> Result<(), Error> {
+fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f64>>>) -> Result<()> {
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
 
