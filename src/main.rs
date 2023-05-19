@@ -1,48 +1,46 @@
+use std::num::NonZeroUsize;
+use crate::audiogen::{Component, generate_audio};
+use crate::stft::ShortTimeFourierTransform;
+
 mod stft;
 mod windowing;
+mod audiogen;
 
 fn main() {
-    /*
-    // let's generate ten seconds of fake audio
-    let sample_rate: usize = 44100;
-    let seconds: usize = 10;
-    let sample_count = sample_rate * seconds;
-    let all_samples = (0..sample_count).map(|x| x as f64).collect::<Vec<f64>>();
+    let sample_rate = 44100;
+    let signal_duration = 10.0;
+    let all_samples = generate_audio(sample_rate, signal_duration, [
+        Component::new_dc(5.),
+        Component::new(20.0, 12.0, 0.3),
+        Component::new(220.0, 5.0, 0.5),
+        Component::new(138.0, 4.0, 1.5),
+    ]);
 
-    // let's initialize our short-time fourier transform
-    let window_type: WindowType = WindowType::Hanning;
-    let window_size: usize = 1024;
-    let step_size: usize = 512;
-    let mut stft = STFT::<f64>::new(window_type, window_size, step_size);
+    println!("Sample rate: {} Hz", sample_rate);
+    println!("Input signal duration: {} s", signal_duration);
+    println!("Generated sample vector of length {}", all_samples.len());
 
-    // we need a buffer to hold a computed column of the spectrogram
-    let mut spectrogram_column: Vec<f64> = std::iter::repeat(0.).take(stft.output_size()).collect();
+    let num_fft_samples = NonZeroUsize::new(512).expect("input is nonzero");
+    let window_size = NonZeroUsize::new(1024).expect("input is nonzero");
+    let step_size = NonZeroUsize::new(64).expect("input is nonzero");
+    let mut stft = ShortTimeFourierTransform::new(num_fft_samples, window_size, step_size);
 
-    // iterate over all the samples in chunks of 3000 samples.
-    // in a real program you would probably read from something instead.
-    for some_samples in (&all_samples[..]).chunks(3000) {
-        // append the samples to the internal ringbuffer of the stft
+    let mut spectrogram_column = vec![0.; stft.output_size()];
+
+    // Number of columns: half of the FFT sample count.
+    println!("Number of spectrogram columns: {}", spectrogram_column.len());
+
+    // Highest detectable frequency: Half of the sampling rate. (Nyquist theorem.)
+    println!("Highest detectable frequency: {} Hz", spectrogram_column.len() as f64 * sample_rate as f64 / (num_fft_samples.get() as f64));
+
+    for some_samples in all_samples[..].chunks(128) {
         stft.append_samples(some_samples);
-
-        // as long as there remain window_size samples in the internal
-        // ringbuffer of the stft
         while stft.contains_enough_to_compute() {
-            // compute one column of the stft by
-            // taking the first window_size samples of the internal ringbuffer,
-            // multiplying them with the window,
-            // computing the fast fourier transform,
-            // taking half of the symetric complex outputs,
-            // computing the norm of the complex outputs and
-            // taking the log10
-            stft.compute_column(&mut spectrogram_column[..]);
+            stft.compute_ssb_spectrum(&mut spectrogram_column[..]);
 
-            // here's where you would do something with the
-            // spectrogram_column...
+            // TODO: Do something with the spectrum.
 
-            // drop step_size samples from the internal ringbuffer of the stft
-            // making a step of size step_size
             stft.move_to_next_column();
         }
     }
-    */
 }

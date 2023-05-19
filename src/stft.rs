@@ -244,8 +244,8 @@ mod test {
     use super::*;
     use crate::windowing::HannWindow;
     use approx::{assert_relative_eq, assert_ulps_eq};
-    use num::traits::FloatConst;
     use rand::prelude::*;
+    use crate::audiogen::sinusoid;
 
     #[test]
     pub fn output_size_is_half_of_fft_size() {
@@ -421,18 +421,7 @@ mod test {
         let p3 = 1.5;
 
         // The noise amplitude.
-        let noise_amplitude = 1.0;
-
-        // Helper functions.
-        #[inline]
-        fn omega(frequency: f64) -> f64 {
-            2. * f64::PI() * frequency
-        }
-
-        #[inline]
-        fn sinusoid(t: f64, frequency: f64, amplitude: f64, phase: f64) -> f64 {
-            amplitude * (omega(frequency) * t - phase).sin()
-        }
+        let noise_amplitude = 0.0;
 
         // Create the signal.
         let signal = time
