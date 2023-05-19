@@ -88,6 +88,7 @@ where
 }
 
 /// A Hann window function, also known as a Raised Cosine window.
+#[derive(Default, Copy, Clone)]
 pub struct HannWindow;
 
 impl<T> WindowFunction<T> for HannWindow
@@ -103,13 +104,8 @@ where
     }
 }
 
-impl Default for HannWindow {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
 /// A Hamming window function.
+#[derive(Default, Copy, Clone)]
 pub struct HammingWindow;
 
 impl<T> WindowFunction<T> for HammingWindow
@@ -125,13 +121,8 @@ where
     }
 }
 
-impl Default for HammingWindow {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
 /// A Blackman window function.
+#[derive(Default, Copy, Clone)]
 pub struct BlackmanWindow;
 
 impl<T> WindowFunction<T> for BlackmanWindow
@@ -147,13 +138,8 @@ where
     }
 }
 
-impl Default for BlackmanWindow {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
 /// A Nutall window function.
+#[derive(Default, Copy, Clone)]
 pub struct NuttallWindow;
 
 impl<T> WindowFunction<T> for NuttallWindow
@@ -169,13 +155,8 @@ where
     }
 }
 
-impl Default for NuttallWindow {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
 /// A Bartlett (triangular) window function.
+#[derive(Default, Copy, Clone)]
 pub struct BartlettWindow;
 
 impl<T> WindowFunction<T> for BartlettWindow
@@ -191,13 +172,8 @@ where
     }
 }
 
-impl Default for BartlettWindow {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
 /// A Boxcar window function (i.e. similar to not using a window at all).
+#[derive(Default, Copy, Clone)]
 pub struct BoxcarWindow;
 
 impl<T> WindowFunction<T> for BoxcarWindow
@@ -211,12 +187,6 @@ where
             .map(|x| x.unwrap())
             .collect();
         window.into()
-    }
-}
-
-impl Default for BoxcarWindow {
-    fn default() -> Self {
-        Self {}
     }
 }
 
