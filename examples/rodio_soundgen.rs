@@ -11,7 +11,7 @@ fn main() {
     sink.set_volume(0.1);
 
     for i in [932, 587, 523, 466].iter() {
-        let source = SineWave::new(*i).take_duration(period);
+        let source = SineWave::new(*i as _).take_duration(period);
         sink.append(source);
     }
 
