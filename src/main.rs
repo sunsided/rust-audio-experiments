@@ -27,16 +27,18 @@ fn main() -> Result<()> {
     let paused = Arc::new(AtomicBool::new(false));
     let completed = Arc::new(AtomicBool::new(false));
 
-    let file = File::open("audio/sweep.ogg")?;
+    let file = File::open("audio/waiting-for-a-train.ogg")?;
     let decoder = Decoder::new(BufReader::new(file))?;
 
     let sample_rate = decoder.sample_rate() as usize;
+    let display_max_frequency: f64 = 22050.0 * 0.25; // Hertz
+    let display_max_frequency: f64 = display_max_frequency.min(sample_rate as f64 * 0.5);
 
     // Signal to synchronize the render thread with the STFT thread.
     let wake_up = Arc::new((Mutex::new(false), Condvar::new()));
 
     let spectrogram_column = calculate_stft_threaded(wake_up.clone(), completed.clone(), sample_rate, decoder);
-    visualize(wake_up, paused, completed, spectrogram_column)
+    visualize(wake_up, paused, completed, spectrogram_column, sample_rate, display_max_frequency)
 }
 
 /// Calculates the STFT in a background thread.
@@ -48,8 +50,8 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
     println!("Input signal duration: {} s", signal_duration);
     println!("Generated sample vector of length {}", all_samples.len());
 
-    let num_fft_samples = NonZeroUsize::new(WIDTH as usize * 2).expect("input is nonzero");
-    let window_size = NonZeroUsize::new(1024).expect("input is nonzero");
+    let num_fft_samples = NonZeroUsize::new(1024).expect("input is nonzero");
+    let window_size = NonZeroUsize::new(512).expect("input is nonzero");
     let step_size = NonZeroUsize::new(64).expect("input is nonzero");
     let mut stft = ShortTimeFourierTransform::new(num_fft_samples, window_size, step_size);
 
@@ -111,7 +113,7 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
 }
 
 /// Visualizes the STFT in a background thread.
-fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f64>>>) -> Result<()> {
+fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f64>>>, sample_rate: usize, display_max_frequency: f64) -> Result<()> {
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
 
@@ -153,12 +155,20 @@ fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, comp
                 frame.copy_within(start..end, 0);
 
                 let spectrum = spectrogram_column.read().expect("lock acquired");
+                let spectrum_len = spectrum.len() as f64;
+                let max_frequency_bin = spectrum_len * display_max_frequency / (sample_rate as f64 * 0.5);
+
                 for (i, pixel) in frame.chunks_exact_mut(4).skip((HEIGHT - 1) as usize * WIDTH as usize).enumerate() {
-                    let position = i * spectrum.len() / WIDTH as usize;
-                    debug_assert_eq!(position, i);
+
+                    // TODO: Map the input range to the target range (0..display_max_frequency).
+                    let position = (i as f64 / WIDTH as f64) * max_frequency_bin;
+                    let position = position as usize;
 
                     max_value = max_value.max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
                     let value = spectrum[position] / max_value;
+
+                    // Increase intensity.
+                    let value = value.sqrt();
 
                     let color = palette.at(value);
 
