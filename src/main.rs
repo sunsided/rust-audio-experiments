@@ -1,20 +1,24 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use crate::stft::ShortTimeFourierTransform;
+
+use anyhow::Result;
 use pixels::{Pixels, SurfaceTexture};
 use rodio::{Decoder, Source};
-use anyhow::Result;
 use winit::{
     dpi::LogicalSize,
-    event::{Event, VirtualKeyCode},
-    event_loop::{ControlFlow, EventLoop},
+    event::Event,
+    event_loop::EventLoop,
     window::WindowBuilder,
 };
+use winit::event::WindowEvent;
+use winit::keyboard::KeyCode;
 use winit_input_helper::WinitInputHelper;
+
+use crate::stft::ShortTimeFourierTransform;
 
 mod stft;
 mod windowing;
@@ -106,7 +110,7 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
         }
 
         completed.store(true, Ordering::Relaxed);
-        let duration  = Instant::now() - start;
+        let duration = Instant::now() - start;
         println!("STFT calculation finished in {} loops after {:?}", count, duration);
     });
     spectrogram_column
@@ -114,7 +118,7 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
 
 /// Visualizes the STFT in a background thread.
 fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f64>>>, sample_rate: usize, display_max_frequency: f64) -> Result<()> {
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new()?;
     let mut input = WinitInputHelper::new();
 
     let window = {
@@ -140,63 +144,65 @@ fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, comp
     let mut max_value = 1.0f64;
     let mut stft_started = false;
 
-    event_loop.run(move |event, _, control_flow| {
-        if let Event::RedrawRequested(_) = event {
-            let is_paused = paused.load(Ordering::Relaxed);
-            let is_finished = completed.load(Ordering::Relaxed);
+    event_loop.run(move |event, target| {
+        if let Event::WindowEvent { event: ref we, .. } = event {
+            if let WindowEvent::RedrawRequested = we {
+                let is_paused = paused.load(Ordering::Relaxed);
+                let is_finished = completed.load(Ordering::Relaxed);
 
-            if !is_paused && !is_finished {
-                let frame = pixels.frame_mut();
-                debug_assert_eq!(frame.len(), (WIDTH * HEIGHT * 4) as _);
+                if !is_paused && !is_finished {
+                    let frame = pixels.frame_mut();
+                    debug_assert_eq!(frame.len(), (WIDTH * HEIGHT * 4) as _);
 
-                // Move all pixels one row up.
-                let start: usize = WIDTH as usize * 4;
-                let end: usize = HEIGHT as usize * WIDTH as usize * 4;
-                frame.copy_within(start..end, 0);
+                    // Move all pixels one row up.
+                    let start: usize = WIDTH as usize * 4;
+                    let end: usize = HEIGHT as usize * WIDTH as usize * 4;
+                    frame.copy_within(start..end, 0);
 
-                let spectrum = spectrogram_column.read().expect("lock acquired");
-                let spectrum_len = spectrum.len() as f64;
-                let max_frequency_bin = spectrum_len * display_max_frequency / (sample_rate as f64 * 0.5);
+                    let spectrum = spectrogram_column.read().expect("lock acquired");
+                    let spectrum_len = spectrum.len() as f64;
+                    let max_frequency_bin = spectrum_len * display_max_frequency / (sample_rate as f64 * 0.5);
 
-                for (i, pixel) in frame.chunks_exact_mut(4).skip((HEIGHT - 1) as usize * WIDTH as usize).enumerate() {
+                    for (i, pixel) in frame.chunks_exact_mut(4).skip((HEIGHT - 1) as usize * WIDTH as usize).enumerate() {
 
-                    // TODO: Map the input range to the target range (0..display_max_frequency).
-                    let position = (i as f64 / WIDTH as f64) * max_frequency_bin;
-                    let position = position as usize;
+                        // TODO: Map the input range to the target range (0..display_max_frequency).
+                        let position = (i as f64 / WIDTH as f64) * max_frequency_bin;
+                        let position = position as usize;
 
-                    max_value = max_value.max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
-                    let value = spectrum[position] / max_value;
+                        max_value = max_value.max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
+                        let value = spectrum[position] / max_value;
 
-                    // Increase intensity.
-                    let value = value.sqrt();
+                        // Increase intensity.
+                        let value = value.sqrt();
 
-                    let color = palette.at(value);
+                        let color = palette.at(value);
 
-                    let red = ((color.r * 255.0) as u8).max(0).min(255);
-                    let green = ((color.g * 255.0) as u8).max(0).min(255);
-                    let blue = ((color.b * 255.0) as u8).max(0).min(255);
+                        let red = ((color.r * 255.0) as u8).max(0).min(255);
+                        let green = ((color.g * 255.0) as u8).max(0).min(255);
+                        let blue = ((color.b * 255.0) as u8).max(0).min(255);
 
-                    pixel.copy_from_slice(&[red, green, blue, 0xff]);
+                        pixel.copy_from_slice(&[red, green, blue, 0xff]);
+                    }
+                    drop(spectrum);
                 }
-                drop(spectrum);
-            }
 
-            if let Err(err) = pixels.render() {
-                eprintln!("pixels.render: {:?}", err);
-                *control_flow = ControlFlow::Exit;
-                return;
+                if let Err(err) = pixels.render() {
+                    eprintln!("pixels.render: {:?}", err);
+                    target.exit();
+                    return;
+                }
             }
         }
 
         // For everything else, for let winit_input_helper collect events to build its state.
         // It returns `true` when it is time to update our game state and request a redraw.
         if input.update(&event) {
-            if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() || input.destroyed() {
-                *control_flow = ControlFlow::Exit;
+            if input.key_pressed(KeyCode::Escape) || input.close_requested() || input.destroyed() {
+                target.exit();
                 return;
             }
 
-            if input.key_pressed(VirtualKeyCode::Space) {
+            if input.key_pressed(KeyCode::Space) {
                 paused.store(!paused.load(Ordering::Relaxed), Ordering::Relaxed);
             }
 
@@ -204,7 +210,7 @@ fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, comp
             if let Some(size) = input.window_resized() {
                 if let Err(err) = pixels.resize_surface(size.width, size.height) {
                     eprintln!("pixels.resize_surface: {:?}", err);
-                    *control_flow = ControlFlow::Exit;
+                    target.exit();
                     return;
                 }
             }
@@ -220,5 +226,7 @@ fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, comp
 
             window.request_redraw();
         }
-    });
+    }).unwrap();
+
+    Ok(())
 }
