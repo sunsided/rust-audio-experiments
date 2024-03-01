@@ -1,13 +1,13 @@
-use std::fs::File;
-use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use cpal::{Stream, StreamConfig};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use pixels::{Pixels, SurfaceTexture};
-use rodio::{Decoder, Source};
 use winit::{
     dpi::LogicalSize,
     event::Event,
@@ -28,26 +28,61 @@ const WIDTH: u32 = 400;
 const HEIGHT: u32 = 300;
 
 fn main() -> Result<()> {
+    let (sender, recv) = std::sync::mpsc::channel();
+
     let paused = Arc::new(AtomicBool::new(false));
     let completed = Arc::new(AtomicBool::new(false));
 
-    let file = File::open("audio/waiting-for-a-train.ogg")?;
-    let decoder = Decoder::new(BufReader::new(file))?;
+    let (config, _audio_stream) = capture_audio(sender)?;
+    std::thread::sleep(std::time::Duration::from_millis(10));
 
-    let sample_rate = decoder.sample_rate() as usize;
-    let display_max_frequency: f64 = 22050.0 * 0.25; // Hertz
-    let display_max_frequency: f64 = display_max_frequency.min(sample_rate as f64 * 0.5);
+    let sample_rate = config.sample_rate.0 as usize;
+    let display_max_frequency: f32 = 22050.0 * 0.25; // Hertz
+    let display_max_frequency: f32 = display_max_frequency.min(sample_rate as f32 * 0.5);
 
     // Signal to synchronize the render thread with the STFT thread.
     let wake_up = Arc::new((Mutex::new(false), Condvar::new()));
 
-    let spectrogram_column = calculate_stft_threaded(wake_up.clone(), completed.clone(), sample_rate, decoder);
+    let spectrogram_column = calculate_stft_threaded(wake_up.clone(), completed.clone(), sample_rate, recv);
     visualize(wake_up, paused, completed, spectrogram_column, sample_rate, display_max_frequency)
 }
 
+fn capture_audio(prod: Sender<Vec<f32>>) -> Result<(StreamConfig, Stream), anyhow::Error> {
+    let host = cpal::default_host();
+    let device = host.default_input_device().ok_or_else(|| anyhow::anyhow!("No input device available"))?;
+    println!("Input device: {}", device.name()?);
+
+    let config = device.default_input_config()?;
+    println!("Default input config: {:?}", config);
+    let config = config.config();
+
+    let prod = Arc::new(prod);
+    let input_stream = device.build_input_stream(
+        &config,
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            prod.send(Vec::from(data)).expect("failed to send");
+        },
+        move |err| {
+            eprintln!("Error during stream: {}", err);
+        },
+        None,
+    )?;
+    input_stream.play()?;
+
+    Ok((config, input_stream))
+}
+
 /// Calculates the STFT in a background thread.
-fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<AtomicBool>, sample_rate: usize, decoder: Decoder<BufReader<File>>) -> Arc<RwLock<Vec<f64>>> {
-    let all_samples: Vec<f64> = decoder.into_iter().map(|i| i as f64 / (i16::MAX as f64)).collect();
+fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<AtomicBool>, sample_rate: usize, decoder: Receiver<Vec<f32>>) -> Arc<RwLock<Vec<f32>>> {
+    // Wait for data to arrive
+    while decoder.try_recv().is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let mut all_samples = Vec::new();
+    while let Ok(itm) = decoder.try_recv() {
+        all_samples.push(itm);
+    }
     let signal_duration = all_samples.len() as f64 / sample_rate as f64;
 
     println!("Sample rate: {} Hz", sample_rate);
@@ -87,8 +122,8 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
         let start = Instant::now();
         let mut count = 0;
 
-        for some_samples in all_samples[..].chunks(1024) {
-            stft.append_samples(some_samples);
+        while let Ok(some_samples) = decoder.recv() {
+            stft.append_samples(&some_samples);
             while stft.contains_enough_to_compute() {
                 // Synchronize with the input buffer.
                 let runtime = Instant::now() - start;
@@ -117,7 +152,7 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
 }
 
 /// Visualizes the STFT in a background thread.
-fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f64>>>, sample_rate: usize, display_max_frequency: f64) -> Result<()> {
+fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f32>>>, sample_rate: usize, display_max_frequency: f32) -> Result<()> {
     let event_loop = EventLoop::new()?;
     let mut input = WinitInputHelper::new();
 
@@ -141,7 +176,7 @@ fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, comp
     let palette = colorgrad::magma();
 
     // The highest value observed in the spectrum.
-    let mut max_value = 1.0f64;
+    let mut max_value = 1.0f32;
     let mut stft_started = false;
 
     event_loop.run(move |event, target| {
@@ -160,13 +195,13 @@ fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, comp
                     frame.copy_within(start..end, 0);
 
                     let spectrum = spectrogram_column.read().expect("lock acquired");
-                    let spectrum_len = spectrum.len() as f64;
-                    let max_frequency_bin = spectrum_len * display_max_frequency / (sample_rate as f64 * 0.5);
+                    let spectrum_len = spectrum.len() as f32;
+                    let max_frequency_bin = spectrum_len * display_max_frequency / (sample_rate as f32 * 0.5);
 
                     for (i, pixel) in frame.chunks_exact_mut(4).skip((HEIGHT - 1) as usize * WIDTH as usize).enumerate() {
 
                         // TODO: Map the input range to the target range (0..display_max_frequency).
-                        let position = (i as f64 / WIDTH as f64) * max_frequency_bin;
+                        let position = (i as f32 / WIDTH as f32) * max_frequency_bin;
                         let position = position as usize;
 
                         max_value = max_value.max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
@@ -175,7 +210,7 @@ fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, comp
                         // Increase intensity.
                         let value = value.sqrt();
 
-                        let color = palette.at(value);
+                        let color = palette.at(value as f64);
 
                         let red = ((color.r * 255.0) as u8).max(0).min(255);
                         let green = ((color.g * 255.0) as u8).max(0).min(255);
