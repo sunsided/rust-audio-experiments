@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use colorgrad::{BasisGradient, Gradient};
+use font8x8::{UnicodeFonts, BASIC_FONTS};
 use pixels::{Pixels, SurfaceTexture};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use winit::application::ApplicationHandler;
@@ -213,9 +214,11 @@ fn visualize(
         input: WinitInputHelper::new(),
         window: None,
         pixels: None,
+        spectrogram_image: vec![0u8; (WIDTH * HEIGHT * 4) as usize],
         // The highest value observed in the spectrum.
         max_value: 1.0,
         stft_started: false,
+        playback_started: None,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -234,58 +237,162 @@ struct App {
     /// The window, created on `resumed`. `Arc` so `pixels` can hold a `'static` surface.
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
+    /// Scrolling spectrogram history; composited into the frame before the overlay
+    /// so the text never gets dragged along by the left-scroll.
+    spectrogram_image: Vec<u8>,
     max_value: f64,
     stft_started: bool,
+    /// Set when playback is signaled, used for the elapsed-time readout.
+    playback_started: Option<Instant>,
 }
 
 impl App {
-    /// Renders one spectrogram frame, scrolling the previous columns to the left.
+    /// Renders one frame: composite the scrolling spectrogram, then draw the overlay.
     fn render(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(pixels) = self.pixels.as_mut() else {
-            return;
-        };
-
         let is_paused = self.paused.load(Ordering::Relaxed);
         let is_finished = self.completed.load(Ordering::Relaxed);
 
+        // Snapshot the newest column so the lock is released before we touch the frame.
+        let spectrum: Vec<f64> = self
+            .spectrogram_column
+            .read()
+            .expect("lock acquired")
+            .clone();
+
         if !is_paused && !is_finished {
-            let frame = pixels.frame_mut();
-            debug_assert_eq!(frame.len(), (WIDTH * HEIGHT * 4) as _);
-
-            // Scroll one pixel column to the left; the newest column is drawn on the right.
-            frame.copy_within(4.., 0);
-
-            let spectrum = self.spectrogram_column.read().expect("lock acquired");
-            let spectrum_len = spectrum.len() as f64;
-            let max_frequency_bin =
-                spectrum_len * self.display_max_frequency / (self.sample_rate as f64 * 0.5);
-
-            self.max_value = self
-                .max_value
-                .max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
-
-            // Draw the newest column into the rightmost pixel of every row:
-            // low frequencies at the bottom, high frequencies at the top.
-            let last_col = (WIDTH - 1) as usize;
-            for y in 0..HEIGHT as usize {
-                let freq_fraction = (HEIGHT as usize - 1 - y) as f64 / HEIGHT as f64;
-                let position = ((freq_fraction * max_frequency_bin) as usize)
-                    .min(spectrum.len().saturating_sub(1));
-
-                // Increase intensity.
-                let value = (spectrum[position] / self.max_value).sqrt();
-
-                let [red, green, blue, _] = self.palette.at(value as f32).to_rgba8();
-                let idx = (y * WIDTH as usize + last_col) * 4;
-                frame[idx..idx + 4].copy_from_slice(&[red, green, blue, 0xff]);
-            }
-            drop(spectrum);
+            self.append_column(&spectrum);
         }
+        let (peak_hz, peak_value) = self.peak_frequency(&spectrum);
+
+        let elapsed = self
+            .playback_started
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+        let status = if is_finished {
+            "DONE"
+        } else if is_paused {
+            "PAUSED"
+        } else {
+            "PLAYING"
+        };
+        let overlay = [
+            format!("fs {} Hz", self.sample_rate),
+            format!("fmax {:.0} Hz", self.display_max_frequency),
+            format!("peak {:.0} Hz", peak_hz),
+            format!("level {:.2}", peak_value / self.max_value),
+            format!("t {:.1} s", elapsed),
+            status.to_string(),
+        ];
+
+        let Some(pixels) = self.pixels.as_mut() else {
+            return;
+        };
+        let frame = pixels.frame_mut();
+        debug_assert_eq!(frame.len(), (WIDTH * HEIGHT * 4) as _);
+
+        // Blit the scrolling spectrogram, then stamp the overlay on top of it.
+        frame.copy_from_slice(&self.spectrogram_image);
+        for (row, line) in overlay.iter().enumerate() {
+            draw_text(frame, 4, 4 + row * 9, line, [0xff, 0xff, 0xff, 0xff]);
+        }
+        // Frequency axis hints: top = fmax, bottom = DC.
+        draw_text(
+            frame,
+            WIDTH as usize - 64,
+            4,
+            "high",
+            [0xff, 0xff, 0xff, 0xff],
+        );
+        draw_text(
+            frame,
+            WIDTH as usize - 56,
+            HEIGHT as usize - 12,
+            "0 Hz",
+            [0xff, 0xff, 0xff, 0xff],
+        );
 
         if let Err(err) = pixels.render() {
             eprintln!("pixels.render: {:?}", err);
             event_loop.exit();
         }
+    }
+
+    /// Scrolls the spectrogram image one column left and draws the newest column on
+    /// the right: low frequencies at the bottom, high frequencies at the top.
+    fn append_column(&mut self, spectrum: &[f64]) {
+        self.spectrogram_image.copy_within(4.., 0);
+
+        let spectrum_len = spectrum.len() as f64;
+        let max_frequency_bin =
+            spectrum_len * self.display_max_frequency / (self.sample_rate as f64 * 0.5);
+        self.max_value = self
+            .max_value
+            .max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
+
+        let last_col = (WIDTH - 1) as usize;
+        for y in 0..HEIGHT as usize {
+            let freq_fraction = (HEIGHT as usize - 1 - y) as f64 / HEIGHT as f64;
+            let position = ((freq_fraction * max_frequency_bin) as usize)
+                .min(spectrum.len().saturating_sub(1));
+
+            // Increase intensity.
+            let value = (spectrum[position] / self.max_value).sqrt();
+
+            let [red, green, blue, _] = self.palette.at(value as f32).to_rgba8();
+            let idx = (y * WIDTH as usize + last_col) * 4;
+            self.spectrogram_image[idx..idx + 4].copy_from_slice(&[red, green, blue, 0xff]);
+        }
+    }
+
+    /// Returns the dominant `(frequency_hz, magnitude)` within the displayed band.
+    fn peak_frequency(&self, spectrum: &[f64]) -> (f64, f64) {
+        let len = spectrum.len();
+        if len == 0 {
+            return (0.0, 0.0);
+        }
+        let max_frequency_bin =
+            (len as f64 * self.display_max_frequency / (self.sample_rate as f64 * 0.5)) as usize;
+        let upper = max_frequency_bin.clamp(1, len);
+
+        let (mut best_bin, mut best_value) = (0usize, f64::MIN);
+        for (bin, &value) in spectrum[..upper].iter().enumerate() {
+            if value > best_value {
+                best_value = value;
+                best_bin = bin;
+            }
+        }
+
+        // Bin (len - 1) maps to the Nyquist frequency (sample_rate / 2).
+        let hz = best_bin as f64 / (len - 1).max(1) as f64 * (self.sample_rate as f64 * 0.5);
+        (hz, best_value)
+    }
+}
+
+/// Draws `text` into the RGBA `frame` at pixel `(x, y)` with a 1px drop shadow.
+fn draw_text(frame: &mut [u8], x: usize, y: usize, text: &str, color: [u8; 4]) {
+    draw_text_raw(frame, x + 1, y + 1, text, [0, 0, 0, 0xff]);
+    draw_text_raw(frame, x, y, text, color);
+}
+
+/// Blits `text` using the 8x8 bitmap font, advancing 8px per glyph. Clips to bounds.
+fn draw_text_raw(frame: &mut [u8], x: usize, y: usize, text: &str, color: [u8; 4]) {
+    let mut cursor_x = x;
+    for ch in text.chars() {
+        if let Some(glyph) = BASIC_FONTS.get(ch) {
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..8 {
+                    if bits & (1 << col) != 0 {
+                        let px = cursor_x + col;
+                        let py = y + row;
+                        if px < WIDTH as usize && py < HEIGHT as usize {
+                            let idx = (py * WIDTH as usize + px) * 4;
+                            frame[idx..idx + 4].copy_from_slice(&color);
+                        }
+                    }
+                }
+            }
+        }
+        cursor_x += 8;
     }
 }
 
@@ -355,6 +462,7 @@ impl ApplicationHandler for App {
         // Signal STFT thread to start.
         if !self.stft_started {
             self.stft_started = true;
+            self.playback_started = Some(Instant::now());
             let (lock, cvar) = &*self.wake_up;
             let mut calculate = lock.lock().unwrap();
             *calculate = true;
