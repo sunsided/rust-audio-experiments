@@ -432,12 +432,11 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::RedrawRequested => self.render(event_loop),
             WindowEvent::Resized(size) => {
-                if let Some(pixels) = self.pixels.as_mut() {
-                    if let Err(err) = pixels.resize_surface(size.width, size.height) {
+                if let Some(pixels) = self.pixels.as_mut()
+                    && let Err(err) = pixels.resize_surface(size.width, size.height) {
                         eprintln!("pixels.resize_surface: {:?}", err);
                         event_loop.exit();
                     }
-                }
             }
             _ => {}
         }
