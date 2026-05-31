@@ -1791,7 +1791,8 @@ dependencies = [
 [[package]]
 name = "ruststft"
 version = "0.4.0"
-source = "git+https://github.com/sunsided/stft?branch=main#a8c240ec63623a5811a014e015d072d56eb7d913"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b1144f84bd64cf89c5e3287ad01112ca15d9d55fa1682a1b9a5657008d56e44"
 dependencies = [
  "num-complex",
  "num-traits",
