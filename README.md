@@ -1,6 +1,7 @@
 # 🔉 Audio & Short-Time Fourier Transforms
 
 This project experiments with calculation and visualizations of STFTs in Rust.
+The transforms are powered by the [`ruststft`](https://github.com/sunsided/stft) crate.
 Here is a spectral visualization of the beginning of the song _[Waiting for a Train](audio/waiting-for-a-train.ogg)_:
 
 <p align="center" style="text-align: center">
