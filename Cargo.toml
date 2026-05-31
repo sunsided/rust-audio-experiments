@@ -13,7 +13,7 @@ path = "examples/rodio_play.rs"
 
 [dependencies]
 rodio = { version = "0.22.2", default-features = false, features = ["vorbis", "playback"] }
-ruststft = { git = "https://github.com/sunsided/stft", branch = "feature/v0.4-redesign" }
+ruststft = { git = "https://github.com/sunsided/stft", branch = "main" }
 pixels = "0.17.1"
 winit = { version = "0.30.13", features = ["rwh_05"] }
 winit_input_helper = "0.17.0"

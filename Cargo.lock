@@ -1785,7 +1785,7 @@ dependencies = [
 [[package]]
 name = "ruststft"
 version = "0.4.0"
-source = "git+https://github.com/sunsided/stft?branch=feature%2Fv0.4-redesign#fbc4c0fce5ab45f751fc70bf021ec2925b8c5ed6"
+source = "git+https://github.com/sunsided/stft?branch=main#a8c240ec63623a5811a014e015d072d56eb7d913"
 dependencies = [
  "num-complex",
  "num-traits",
