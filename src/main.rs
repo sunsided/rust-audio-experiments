@@ -1,28 +1,23 @@
 use std::fs::File;
 use std::io::BufReader;
-use std::num::NonZeroUsize;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use colorgrad::{BasisGradient, Gradient};
 use pixels::{Pixels, SurfaceTexture};
-use rodio::{Decoder, Source};
-use winit::{
-    dpi::LogicalSize,
-    event::Event,
-    event_loop::EventLoop,
-    window::WindowBuilder,
-};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::KeyCode;
+use winit::window::{Window, WindowId};
 use winit_input_helper::WinitInputHelper;
 
-use crate::stft::ShortTimeFourierTransform;
-
-mod stft;
-mod windowing;
-mod audiogen;
+use ruststft::spectrum::magnitude_into;
+use ruststft::{Complex, Scaling, Stft, Window as StftWindow};
 
 const WIDTH: u32 = 400;
 const HEIGHT: u32 = 300;
@@ -31,50 +26,103 @@ fn main() -> Result<()> {
     let paused = Arc::new(AtomicBool::new(false));
     let completed = Arc::new(AtomicBool::new(false));
 
-    let file = File::open("audio/waiting-for-a-train.ogg")?;
+    const AUDIO_PATH: &str = "audio/waiting-for-a-train.ogg";
+
+    // Decoder used to analyze the signal (consumed by the STFT thread).
+    let file = File::open(AUDIO_PATH)?;
     let decoder = Decoder::new(BufReader::new(file))?;
 
-    let sample_rate = decoder.sample_rate() as usize;
+    let sample_rate = decoder.sample_rate().get() as usize;
     let display_max_frequency: f64 = 22050.0 * 0.25; // Hertz
     let display_max_frequency: f64 = display_max_frequency.min(sample_rate as f64 * 0.5);
+
+    // Open the audio output and queue the same track, paused until the visualization starts.
+    let stream_handle = DeviceSinkBuilder::open_default_sink()?;
+    let player = Player::connect_new(stream_handle.mixer());
+    player.set_volume(0.5);
+    player.pause();
+    let playback_file = File::open(AUDIO_PATH)?;
+    player.append(Decoder::new(BufReader::new(playback_file))?);
 
     // Signal to synchronize the render thread with the STFT thread.
     let wake_up = Arc::new((Mutex::new(false), Condvar::new()));
 
-    let spectrogram_column = calculate_stft_threaded(wake_up.clone(), completed.clone(), sample_rate, decoder);
-    visualize(wake_up, paused, completed, spectrogram_column, sample_rate, display_max_frequency)
+    let spectrogram_column = calculate_stft_threaded(
+        wake_up.clone(),
+        completed.clone(),
+        paused.clone(),
+        sample_rate,
+        decoder,
+        stream_handle,
+        player,
+    );
+    visualize(
+        wake_up,
+        paused,
+        completed,
+        spectrogram_column,
+        sample_rate,
+        display_max_frequency,
+    )
 }
 
 /// Calculates the STFT in a background thread.
-fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<AtomicBool>, sample_rate: usize, decoder: Decoder<BufReader<File>>) -> Arc<RwLock<Vec<f64>>> {
-    let all_samples: Vec<f64> = decoder.into_iter().map(|i| i as f64 / (i16::MAX as f64)).collect();
+fn calculate_stft_threaded(
+    wake_up: Arc<(Mutex<bool>, Condvar)>,
+    completed: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    sample_rate: usize,
+    decoder: Decoder<BufReader<File>>,
+    stream_handle: MixerDeviceSink,
+    player: Player,
+) -> Arc<RwLock<Vec<f64>>> {
+    // rodio 0.22 decodes to f32 samples already normalized to [-1, 1].
+    let all_samples: Vec<f64> = decoder.into_iter().map(|s| s as f64).collect();
     let signal_duration = all_samples.len() as f64 / sample_rate as f64;
 
     println!("Sample rate: {} Hz", sample_rate);
     println!("Input signal duration: {} s", signal_duration);
     println!("Generated sample vector of length {}", all_samples.len());
 
-    let num_fft_samples = NonZeroUsize::new(1024).expect("input is nonzero");
-    let window_size = NonZeroUsize::new(512).expect("input is nonzero");
-    let step_size = NonZeroUsize::new(64).expect("input is nonzero");
-    let mut stft = ShortTimeFourierTransform::new(num_fft_samples, window_size, step_size);
+    let num_fft_samples = 1024usize;
+    let window_size = 512usize;
+    let step_size = 64usize;
+    let mut stft = Stft::builder()
+        .window(StftWindow::<f64>::rectangular(window_size))
+        .fft_size(num_fft_samples)
+        .hop_size(step_size)
+        .scaling(Scaling::Magnitude)
+        .build()
+        .expect("valid STFT configuration");
 
-    let spectrogram_column = vec![0.; stft.output_size()];
+    let spectrogram_column = vec![0.; stft.n_freqs()];
 
-    // Number of columns: half of the FFT sample count.
-    println!("Number of spectrogram columns: {}", spectrogram_column.len());
+    // Number of frequency bins: fft_size / 2 + 1 (DC … Nyquist).
+    println!(
+        "Number of spectrogram columns: {}",
+        spectrogram_column.len()
+    );
 
     // Highest detectable frequency: Half of the sampling rate. (Nyquist theorem)
-    println!("Highest detectable frequency: {} Hz", spectrogram_column.len() as f64 * sample_rate as f64 / (num_fft_samples.get() as f64));
+    println!(
+        "Highest detectable frequency: {} Hz",
+        spectrogram_column.len() as f64 * sample_rate as f64 / (num_fft_samples as f64)
+    );
 
     let spectrogram_column = Arc::new(RwLock::new(spectrogram_column));
     let spectrum = spectrogram_column.clone();
 
-    let expected_loops_per_second = (sample_rate as f64) / step_size.get() as f64;
+    let expected_loops_per_second = (sample_rate as f64) / step_size as f64;
     let expected_duration_per_loop = Duration::from_secs_f64(1.0 / expected_loops_per_second);
-    println!("Will process one audio frame every {:?}", expected_duration_per_loop);
+    println!(
+        "Will process one audio frame every {:?}",
+        expected_duration_per_loop
+    );
 
     std::thread::spawn(move || {
+        // Keep the audio output stream alive for the lifetime of this thread.
+        let _audio_stream = stream_handle;
+
         // Wait for the thread to be signaled.
         {
             let (lock, cvar) = &*wake_up;
@@ -84,14 +132,35 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
             }
         }
 
+        // Start audio playback in lock-step with the real-time-paced STFT loop below.
+        player.play();
+
         let start = Instant::now();
         let mut count = 0;
 
+        // Total time spent paused, excluded from the real-time pacing clock below.
+        let mut paused_offset = Duration::ZERO;
+
+        // Reused buffer for the complex spectrum of the current column.
+        let mut complex_column = vec![Complex::new(0.0, 0.0); stft.n_freqs()];
+
         for some_samples in all_samples[..].chunks(1024) {
-            stft.append_samples(some_samples);
-            while stft.contains_enough_to_compute() {
+            stft.append(some_samples);
+            while stft.ready() {
+                // Honor the visual pause: also pause audio and freeze the pacing clock,
+                // so audio and spectrogram resume together instead of fast-forwarding.
+                if paused.load(Ordering::Relaxed) {
+                    player.pause();
+                    let pause_started = Instant::now();
+                    while paused.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    player.play();
+                    paused_offset += Instant::now() - pause_started;
+                }
+
                 // Synchronize with the input buffer.
-                let runtime = Instant::now() - start;
+                let runtime = Instant::now() - start - paused_offset;
                 let expected_time = expected_duration_per_loop * count;
                 if runtime < expected_time {
                     let wait_time = expected_time - runtime;
@@ -101,132 +170,202 @@ fn calculate_stft_threaded(wake_up: Arc<(Mutex<bool>, Condvar)>, completed: Arc<
                 // Aggregate statistics.
                 count += 1;
 
+                // Compute the complex column, then write its magnitudes into the shared buffer.
+                stft.process_into(&mut complex_column)
+                    .expect("valid column");
+
                 let mut spectrum = spectrum.write().expect("lock acquired");
-                stft.compute_ssb_spectrum(&mut spectrum[..]);
+                magnitude_into(&complex_column, &mut spectrum[..]);
                 drop(spectrum);
 
-                stft.move_to_next_column();
+                stft.step();
             }
         }
 
         completed.store(true, Ordering::Relaxed);
         let duration = Instant::now() - start;
-        println!("STFT calculation finished in {} loops after {:?}", count, duration);
+        println!(
+            "STFT calculation finished in {} loops after {:?}",
+            count, duration
+        );
     });
     spectrogram_column
 }
 
-/// Visualizes the STFT in a background thread.
-fn visualize(wake_up: Arc<(Mutex<bool>, Condvar)>, paused: Arc<AtomicBool>, completed: Arc<AtomicBool>, spectrogram_column: Arc<RwLock<Vec<f64>>>, sample_rate: usize, display_max_frequency: f64) -> Result<()> {
+/// Visualizes the STFT, driving the winit 0.30 event loop.
+fn visualize(
+    wake_up: Arc<(Mutex<bool>, Condvar)>,
+    paused: Arc<AtomicBool>,
+    completed: Arc<AtomicBool>,
+    spectrogram_column: Arc<RwLock<Vec<f64>>>,
+    sample_rate: usize,
+    display_max_frequency: f64,
+) -> Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut input = WinitInputHelper::new();
-
-    let window = {
-        let size = LogicalSize::new(WIDTH as f64, HEIGHT as f64);
-        let scaled_size = LogicalSize::new(WIDTH as f64, HEIGHT as f64);
-        WindowBuilder::new()
-            .with_title("STFT Visualization")
-            .with_inner_size(scaled_size)
-            .with_min_inner_size(size)
-            .build(&event_loop)
-            .unwrap()
+    let mut app = App {
+        wake_up,
+        paused,
+        completed,
+        spectrogram_column,
+        sample_rate,
+        display_max_frequency,
+        palette: colorgrad::preset::magma(),
+        input: WinitInputHelper::new(),
+        window: None,
+        pixels: None,
+        // The highest value observed in the spectrum.
+        max_value: 1.0,
+        stft_started: false,
     };
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
 
-    let mut pixels = {
-        let window_size = window.inner_size();
-        let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        Pixels::new(WIDTH, HEIGHT, surface_texture)?
-    };
+/// Holds the visualization state across the winit 0.30 [`ApplicationHandler`] callbacks.
+struct App {
+    wake_up: Arc<(Mutex<bool>, Condvar)>,
+    paused: Arc<AtomicBool>,
+    completed: Arc<AtomicBool>,
+    spectrogram_column: Arc<RwLock<Vec<f64>>>,
+    sample_rate: usize,
+    display_max_frequency: f64,
+    palette: BasisGradient,
+    input: WinitInputHelper,
+    /// The window, created on `resumed`. `Arc` so `pixels` can hold a `'static` surface.
+    window: Option<Arc<Window>>,
+    pixels: Option<Pixels<'static>>,
+    max_value: f64,
+    stft_started: bool,
+}
 
-    let palette = colorgrad::magma();
+impl App {
+    /// Renders one spectrogram frame, scrolling the previous rows upward.
+    fn render(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(pixels) = self.pixels.as_mut() else {
+            return;
+        };
 
-    // The highest value observed in the spectrum.
-    let mut max_value = 1.0f64;
-    let mut stft_started = false;
+        let is_paused = self.paused.load(Ordering::Relaxed);
+        let is_finished = self.completed.load(Ordering::Relaxed);
 
-    event_loop.run(move |event, target| {
-        if let Event::WindowEvent { event: ref we, .. } = event {
-            if let WindowEvent::RedrawRequested = we {
-                let is_paused = paused.load(Ordering::Relaxed);
-                let is_finished = completed.load(Ordering::Relaxed);
+        if !is_paused && !is_finished {
+            let frame = pixels.frame_mut();
+            debug_assert_eq!(frame.len(), (WIDTH * HEIGHT * 4) as _);
 
-                if !is_paused && !is_finished {
-                    let frame = pixels.frame_mut();
-                    debug_assert_eq!(frame.len(), (WIDTH * HEIGHT * 4) as _);
+            // Move all pixels one row up.
+            let start: usize = WIDTH as usize * 4;
+            let end: usize = HEIGHT as usize * WIDTH as usize * 4;
+            frame.copy_within(start..end, 0);
 
-                    // Move all pixels one row up.
-                    let start: usize = WIDTH as usize * 4;
-                    let end: usize = HEIGHT as usize * WIDTH as usize * 4;
-                    frame.copy_within(start..end, 0);
+            let spectrum = self.spectrogram_column.read().expect("lock acquired");
+            let spectrum_len = spectrum.len() as f64;
+            let max_frequency_bin =
+                spectrum_len * self.display_max_frequency / (self.sample_rate as f64 * 0.5);
 
-                    let spectrum = spectrogram_column.read().expect("lock acquired");
-                    let spectrum_len = spectrum.len() as f64;
-                    let max_frequency_bin = spectrum_len * display_max_frequency / (sample_rate as f64 * 0.5);
+            for (i, pixel) in frame
+                .chunks_exact_mut(4)
+                .skip((HEIGHT - 1) as usize * WIDTH as usize)
+                .enumerate()
+            {
+                // TODO: Map the input range to the target range (0..display_max_frequency).
+                let position = (i as f64 / WIDTH as f64) * max_frequency_bin;
+                let position = position as usize;
 
-                    for (i, pixel) in frame.chunks_exact_mut(4).skip((HEIGHT - 1) as usize * WIDTH as usize).enumerate() {
+                self.max_value = self
+                    .max_value
+                    .max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
+                let value = spectrum[position] / self.max_value;
 
-                        // TODO: Map the input range to the target range (0..display_max_frequency).
-                        let position = (i as f64 / WIDTH as f64) * max_frequency_bin;
-                        let position = position as usize;
+                // Increase intensity.
+                let value = value.sqrt();
 
-                        max_value = max_value.max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
-                        let value = spectrum[position] / max_value;
-
-                        // Increase intensity.
-                        let value = value.sqrt();
-
-                        let color = palette.at(value);
-
-                        let red = ((color.r * 255.0) as u8).max(0).min(255);
-                        let green = ((color.g * 255.0) as u8).max(0).min(255);
-                        let blue = ((color.b * 255.0) as u8).max(0).min(255);
-
-                        pixel.copy_from_slice(&[red, green, blue, 0xff]);
-                    }
-                    drop(spectrum);
-                }
-
-                if let Err(err) = pixels.render() {
-                    eprintln!("pixels.render: {:?}", err);
-                    target.exit();
-                    return;
-                }
+                let [red, green, blue, _] = self.palette.at(value as f32).to_rgba8();
+                pixel.copy_from_slice(&[red, green, blue, 0xff]);
             }
+            drop(spectrum);
         }
 
-        // For everything else, for let winit_input_helper collect events to build its state.
-        // It returns `true` when it is time to update our game state and request a redraw.
-        if input.update(&event) {
-            if input.key_pressed(KeyCode::Escape) || input.close_requested() || input.destroyed() {
-                target.exit();
-                return;
-            }
+        if let Err(err) = pixels.render() {
+            eprintln!("pixels.render: {:?}", err);
+            event_loop.exit();
+        }
+    }
+}
 
-            if input.key_pressed(KeyCode::Space) {
-                paused.store(!paused.load(Ordering::Relaxed), Ordering::Relaxed);
-            }
+impl ApplicationHandler for App {
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: winit::event::StartCause) {
+        self.input.step();
+    }
 
-            // Resize the window
-            if let Some(size) = input.window_resized() {
-                if let Err(err) = pixels.resize_surface(size.width, size.height) {
-                    eprintln!("pixels.resize_surface: {:?}", err);
-                    target.exit();
-                    return;
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        let size = LogicalSize::new(WIDTH as f64, HEIGHT as f64);
+        let attributes = Window::default_attributes()
+            .with_title("STFT Visualization")
+            .with_inner_size(size)
+            .with_min_inner_size(size);
+        let window = Arc::new(
+            event_loop
+                .create_window(attributes)
+                .expect("window created"),
+        );
+
+        let window_size = window.inner_size();
+        let surface_texture =
+            SurfaceTexture::new(window_size.width, window_size.height, window.clone());
+        let pixels = Pixels::new(WIDTH, HEIGHT, surface_texture).expect("pixels created");
+
+        self.window = Some(window);
+        self.pixels = Some(pixels);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        self.input.process_window_event(&event);
+
+        match event {
+            WindowEvent::RedrawRequested => self.render(event_loop),
+            WindowEvent::Resized(size) => {
+                if let Some(pixels) = self.pixels.as_mut() {
+                    if let Err(err) = pixels.resize_surface(size.width, size.height) {
+                        eprintln!("pixels.resize_surface: {:?}", err);
+                        event_loop.exit();
+                    }
                 }
             }
+            _ => {}
+        }
+    }
 
-            // Signal STFT thread to start.
-            if !stft_started {
-                stft_started = true;
-                let (lock, cvar) = &*wake_up;
-                let mut calculate = lock.lock().unwrap();
-                *calculate = true;
-                cvar.notify_one();
-            }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.input.end_step();
 
+        if self.input.key_pressed(KeyCode::Escape)
+            || self.input.close_requested()
+            || self.input.destroyed()
+        {
+            event_loop.exit();
+            return;
+        }
+
+        if self.input.key_pressed(KeyCode::Space) {
+            self.paused
+                .store(!self.paused.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+
+        // Signal STFT thread to start.
+        if !self.stft_started {
+            self.stft_started = true;
+            let (lock, cvar) = &*self.wake_up;
+            let mut calculate = lock.lock().unwrap();
+            *calculate = true;
+            cvar.notify_one();
+        }
+
+        if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }
-    }).unwrap();
-
-    Ok(())
+    }
 }

@@ -1,14 +1,13 @@
-use rodio::{OutputStream, Sink};
 use std::io::BufReader;
 
 fn main() {
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-
-    let sink = Sink::try_new(&stream_handle).unwrap();
-    sink.set_volume(0.1);
+    // rodio 0.22: open the default device sink, then drive it through a Player.
+    let stream_handle = rodio::DeviceSinkBuilder::open_default_sink().unwrap();
+    let player = rodio::Player::connect_new(stream_handle.mixer());
+    player.set_volume(0.1);
 
     let file = std::fs::File::open("audio/woodpecker.ogg").unwrap();
-    sink.append(rodio::Decoder::new(BufReader::new(file)).unwrap());
+    player.append(rodio::Decoder::new(BufReader::new(file)).unwrap());
 
-    sink.sleep_until_end();
+    player.sleep_until_end();
 }

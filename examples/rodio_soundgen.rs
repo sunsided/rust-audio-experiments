@@ -1,20 +1,20 @@
 use rodio::source::SineWave;
-use rodio::{OutputStream, Sink, Source};
+use rodio::Source;
 use std::{thread, time};
 
 fn main() {
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+    // rodio 0.22: open the default device sink, then queue sources on a Player.
+    let stream_handle = rodio::DeviceSinkBuilder::open_default_sink().unwrap();
+    let player = rodio::Player::connect_new(stream_handle.mixer());
+    player.set_volume(0.1);
 
     let period = time::Duration::from_millis(1000);
 
-    let sink = Sink::try_new(&stream_handle).unwrap();
-    sink.set_volume(0.1);
-
     for i in [932, 587, 523, 466].iter() {
         let source = SineWave::new(*i as _).take_duration(period);
-        sink.append(source);
+        player.append(source);
     }
 
     thread::sleep(4 * period);
-    sink.stop();
+    player.stop();
 }
