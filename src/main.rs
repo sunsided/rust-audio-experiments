@@ -239,7 +239,7 @@ struct App {
 }
 
 impl App {
-    /// Renders one spectrogram frame, scrolling the previous rows upward.
+    /// Renders one spectrogram frame, scrolling the previous columns to the left.
     fn render(&mut self, event_loop: &ActiveEventLoop) {
         let Some(pixels) = self.pixels.as_mut() else {
             return;
@@ -252,35 +252,32 @@ impl App {
             let frame = pixels.frame_mut();
             debug_assert_eq!(frame.len(), (WIDTH * HEIGHT * 4) as _);
 
-            // Move all pixels one row up.
-            let start: usize = WIDTH as usize * 4;
-            let end: usize = HEIGHT as usize * WIDTH as usize * 4;
-            frame.copy_within(start..end, 0);
+            // Scroll one pixel column to the left; the newest column is drawn on the right.
+            frame.copy_within(4.., 0);
 
             let spectrum = self.spectrogram_column.read().expect("lock acquired");
             let spectrum_len = spectrum.len() as f64;
             let max_frequency_bin =
                 spectrum_len * self.display_max_frequency / (self.sample_rate as f64 * 0.5);
 
-            for (i, pixel) in frame
-                .chunks_exact_mut(4)
-                .skip((HEIGHT - 1) as usize * WIDTH as usize)
-                .enumerate()
-            {
-                // TODO: Map the input range to the target range (0..display_max_frequency).
-                let position = (i as f64 / WIDTH as f64) * max_frequency_bin;
-                let position = position as usize;
+            self.max_value = self
+                .max_value
+                .max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
 
-                self.max_value = self
-                    .max_value
-                    .max(spectrum.iter().fold(1.0, |max, &v| max.max(v)));
-                let value = spectrum[position] / self.max_value;
+            // Draw the newest column into the rightmost pixel of every row:
+            // low frequencies at the bottom, high frequencies at the top.
+            let last_col = (WIDTH - 1) as usize;
+            for y in 0..HEIGHT as usize {
+                let freq_fraction = (HEIGHT as usize - 1 - y) as f64 / HEIGHT as f64;
+                let position = ((freq_fraction * max_frequency_bin) as usize)
+                    .min(spectrum.len().saturating_sub(1));
 
                 // Increase intensity.
-                let value = value.sqrt();
+                let value = (spectrum[position] / self.max_value).sqrt();
 
                 let [red, green, blue, _] = self.palette.at(value as f32).to_rgba8();
-                pixel.copy_from_slice(&[red, green, blue, 0xff]);
+                let idx = (y * WIDTH as usize + last_col) * 4;
+                frame[idx..idx + 4].copy_from_slice(&[red, green, blue, 0xff]);
             }
             drop(spectrum);
         }
