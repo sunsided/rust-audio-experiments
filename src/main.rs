@@ -210,7 +210,7 @@ fn visualize(
         spectrogram_column,
         sample_rate,
         display_max_frequency,
-        palette: colorgrad::preset::magma(),
+        palette: colorgrad::preset::inferno(),
         input: WinitInputHelper::new(),
         window: None,
         pixels: None,
