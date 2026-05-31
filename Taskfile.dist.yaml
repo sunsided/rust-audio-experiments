@@ -1,0 +1,103 @@
+version: '3'
+
+vars:
+  PROFILE: '{{ .PROFILE | default "debug" }}'
+  PROFILE_FLAG: '{{ if eq .PROFILE "release" }}--release{{ end }}'
+
+tasks:
+  default:
+    cmds:
+      - task --list --sort=none
+    silent: true
+
+  build:
+    desc: Compile the crate and all targets
+    cmds:
+      - cargo build --all-targets {{.PROFILE_FLAG}}
+    preconditions:
+      - sh: command -v cargo
+        msg: "cargo not found - install Rust from https://rustup.rs/"
+
+  build:release:
+    desc: Compile in release mode
+    cmds:
+      - task: build
+        vars: {PROFILE: release}
+
+  run:
+    desc: "Run the main binary (pass args: task run -- <args>)"
+    cmds:
+      - cargo run {{.PROFILE_FLAG}} -- {{.CLI_ARGS}}
+    preconditions:
+      - sh: command -v cargo
+        msg: "cargo not found - install Rust from https://rustup.rs/"
+
+  example:soundgen:
+    desc: Run the rodio_soundgen example
+    cmds:
+      - cargo run --example rodio_soundgen {{.PROFILE_FLAG}} -- {{.CLI_ARGS}}
+
+  example:play:
+    desc: Run the rodio_play example
+    cmds:
+      - cargo run --example rodio_play {{.PROFILE_FLAG}} -- {{.CLI_ARGS}}
+
+  test:
+    desc: "Run the test suite (pass args: task test -- <args>)"
+    cmds:
+      - cargo test --all-targets {{.CLI_ARGS}}
+    preconditions:
+      - sh: command -v cargo
+        msg: "cargo not found - install Rust from https://rustup.rs/"
+
+  fmt:
+    desc: Format code
+    aliases: [format]
+    cmds:
+      - cargo fmt --all
+    preconditions:
+      - sh: command -v cargo-fmt
+        msg: "rustfmt not found - rustup component add rustfmt"
+
+  lint:
+    desc: Lint with clippy (read-only)
+    cmds:
+      - cargo clippy --all-targets -- -D warnings
+    preconditions:
+      - sh: command -v cargo-clippy
+        msg: "clippy not found - rustup component add clippy"
+
+  lint:fix:
+    desc: Lint and apply automatic fixes
+    aliases: [fix]
+    cmds:
+      - cargo clippy --all-targets --fix --allow-dirty --allow-staged -- -D warnings
+
+  check:
+    desc: All static checks (fmt check + clippy)
+    cmds:
+      - cargo fmt --all --check
+      - cargo clippy --all-targets -- -D warnings
+
+  ci:
+    desc: Full CI sequence (check + test)
+    cmds:
+      - task: check
+      - task: test
+
+  docs:
+    desc: Build documentation
+    cmds:
+      - cargo doc --no-deps
+
+  docs:open:
+    desc: Build and open documentation
+    cmds:
+      - cargo doc --no-deps --open
+
+  clean:
+    desc: Remove build output
+    status:
+      - test ! -d target
+    cmds:
+      - cargo clean
